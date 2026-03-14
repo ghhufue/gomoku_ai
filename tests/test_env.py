@@ -7,12 +7,21 @@ from gomoku_ai.env import (
     BOARD_SIZE,
     CRITICAL_REWARD,
     EMPTY,
+    CPP_BACKEND_AVAILABLE,
     PROBE_REWARD,
     SHAPE_REWARD,
     STEP_PENALTY,
     TERMINAL_REWARD,
+    UNRESOLVED_FOUR_THREAT_PENALTY,
+    UNRESOLVED_WINNING_THREAT_PENALTY,
     GomokuEnv,
+    _py_affected_actions,
+    _py_classify_move_counts,
+    _py_immediate_winning_actions,
+    _py_threat_summary,
+    affected_actions,
     classify_move,
+    classify_move_counts,
     coord_to_action,
     evaluate_shape_reward,
     immediate_winning_actions,
@@ -174,6 +183,38 @@ def test_evaluate_shape_reward_partial_block_does_not_get_critical_bonus() -> No
     assert info["opp_threats_before"]["winning_actions"] == 2
     assert info["opp_threats_after"]["winning_actions"] == 1
     assert reward < CRITICAL_REWARD
+    assert info["unresolved_winning_threat"] is True
+
+
+def test_evaluate_shape_reward_penalizes_ignoring_opponent_winning_threat() -> None:
+    board_before = empty_board()
+    place_many(board_before, [(7, 4, -BLACK), (7, 5, -BLACK), (7, 6, -BLACK), (7, 7, -BLACK)])
+    board_after = board_before.copy()
+    board_after[10, 10] = BLACK
+
+    reward, info = evaluate_shape_reward(board_before, board_after, 10, 10, BLACK)
+
+    assert info["opp_threats_before"]["winning_actions"] == 2
+    assert info["opp_threats_after"]["winning_actions"] == 2
+    assert info["unresolved_winning_threat"] is True
+    assert reward < -100.0
+
+
+def test_evaluate_shape_reward_penalizes_ignoring_opponent_live_four() -> None:
+    board_before = empty_board()
+    place_many(board_before, [(7, 5, -BLACK), (7, 6, -BLACK), (7, 7, -BLACK), (0, 0, BLACK)])
+    board_after = board_before.copy()
+    board_after[10, 10] = BLACK
+
+    reward, info = evaluate_shape_reward(board_before, board_after, 10, 10, BLACK)
+
+    assert info["opp_threats_before"]["winning_actions"] == 0
+    assert info["opp_threats_before"]["live_four"] + info["opp_threats_before"]["rush_four"] > 0
+    assert info["opp_threats_after"]["live_four"] + info["opp_threats_after"]["rush_four"] >= (
+        info["opp_threats_before"]["live_four"] + info["opp_threats_before"]["rush_four"]
+    )
+    assert info["unresolved_four_threat"] is True
+    assert reward < 0.0
 
 
 def test_evaluate_shape_reward_live_two_stays_small() -> None:
@@ -241,3 +282,26 @@ def test_env_reports_win_before_opponent_turn() -> None:
     assert result.done is True
     assert result.info["agent_result"] == "win"
     assert result.reward == TERMINAL_REWARD
+
+
+def test_cpp_backend_matches_python_reference_on_hot_path() -> None:
+    if not CPP_BACKEND_AVAILABLE:
+        return
+
+    board = empty_board()
+    place_many(
+        board,
+        [
+            (7, 7, BLACK),
+            (7, 6, BLACK),
+            (7, 8, BLACK),
+            (6, 7, -BLACK),
+            (8, 8, BLACK),
+            (8, 6, -BLACK),
+        ],
+    )
+
+    assert classify_move_counts(board, 7, 9, BLACK) == _py_classify_move_counts(board, 7, 9, BLACK)
+    assert threat_summary(board, BLACK) == _py_threat_summary(board.copy(), BLACK)
+    assert immediate_winning_actions(board, BLACK) == _py_immediate_winning_actions(board.copy(), BLACK)
+    assert affected_actions(board, 7, 7) == _py_affected_actions(board.copy(), 7, 7)

@@ -5,6 +5,14 @@ from typing import Iterable
 
 import numpy as np
 
+from gomoku_ai.cpp_backend import (
+    BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE,
+    affected_actions as cpp_affected_actions,
+    classify_move_counts as cpp_classify_move_counts,
+    immediate_winning_actions as cpp_immediate_winning_actions,
+    threat_summary as cpp_threat_summary,
+)
+
 
 BOARD_SIZE = 15
 BOARD_AREA = BOARD_SIZE * BOARD_SIZE
@@ -20,6 +28,8 @@ CRITICAL_REWARD = 100.0
 SHAPE_REWARD = 20.0
 PROBE_REWARD = 5.0
 STEP_PENALTY = -1.0
+UNRESOLVED_WINNING_THREAT_PENALTY = 120.0
+UNRESOLVED_FOUR_THREAT_PENALTY = 45.0
 
 PATTERN_KEYS = ("winning_actions", "live_four", "rush_four", "live_three", "sleep_three", "live_two")
 
@@ -162,7 +172,7 @@ def pattern_tuple_to_dict(pattern: tuple[int, int, int, int, int, int]) -> dict[
     }
 
 
-def classify_move_counts(board: np.ndarray, row: int, col: int, player: int) -> tuple[int, int, int, int, int, int]:
+def _py_classify_move_counts(board: np.ndarray, row: int, col: int, player: int) -> tuple[int, int, int, int, int, int]:
     five = 0
     live_four = 0
     rush_four = 0
@@ -180,6 +190,12 @@ def classify_move_counts(board: np.ndarray, row: int, col: int, player: int) -> 
         live_two += direction_patterns[LIVE_TWO_IDX]
 
     return (five, live_four, rush_four, live_three, sleep_three, live_two)
+
+
+def classify_move_counts(board: np.ndarray, row: int, col: int, player: int) -> tuple[int, int, int, int, int, int]:
+    if CPP_BACKEND_AVAILABLE:
+        return cpp_classify_move_counts(board, row, col, player)
+    return _py_classify_move_counts(board, row, col, player)
 
 
 def classify_move(board: np.ndarray, row: int, col: int, player: int) -> dict[str, int | bool]:
@@ -212,7 +228,7 @@ def accumulate_pattern(summary: dict[str, int], pattern: tuple[int, int, int, in
     summary["live_two"] += pattern[LIVE_TWO_IDX]
 
 
-def immediate_winning_actions(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> list[int]:
+def _py_immediate_winning_actions(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> list[int]:
     wins: list[int] = []
     for action, pattern in iter_empty_action_patterns(board, player, actions):
         if pattern[FIVE_IDX]:
@@ -220,14 +236,26 @@ def immediate_winning_actions(board: np.ndarray, player: int, actions: Iterable[
     return wins
 
 
-def threat_summary(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> dict[str, int]:
+def immediate_winning_actions(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> list[int]:
+    if CPP_BACKEND_AVAILABLE:
+        return cpp_immediate_winning_actions(board, player, actions)
+    return _py_immediate_winning_actions(board, player, actions)
+
+
+def _py_threat_summary(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> dict[str, int]:
     summary = empty_pattern_summary()
     for _, pattern in iter_empty_action_patterns(board, player, actions):
         accumulate_pattern(summary, pattern)
     return summary
 
 
-def affected_actions(board: np.ndarray, row: int, col: int, radius: int = 5) -> list[int]:
+def threat_summary(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> dict[str, int]:
+    if CPP_BACKEND_AVAILABLE:
+        return cpp_threat_summary(board, player, actions)
+    return _py_threat_summary(board, player, actions)
+
+
+def _py_affected_actions(board: np.ndarray, row: int, col: int, radius: int = 5) -> list[int]:
     actions: list[int] = []
     for action in empty_actions(board).tolist():
         action_row, action_col = action_to_coord(int(action))
@@ -240,6 +268,12 @@ def affected_actions(board: np.ndarray, row: int, col: int, radius: int = 5) -> 
         ):
             actions.append(int(action))
     return actions
+
+
+def affected_actions(board: np.ndarray, row: int, col: int, radius: int = 5) -> list[int]:
+    if CPP_BACKEND_AVAILABLE:
+        return cpp_affected_actions(board, row, col, radius)
+    return _py_affected_actions(board, row, col, radius)
 
 
 def apply_local_threat_delta(
@@ -318,6 +352,14 @@ def evaluate_shape_reward(board_before: np.ndarray, board_after: np.ndarray, row
     reward += clamp_bonus(offense_delta * 0.12, 40.0)
     reward += clamp_bonus(defense_delta * 0.15, 60.0)
 
+    unresolved_winning_threat = before_opp["winning_actions"] > 0 and after_opp["winning_actions"] > 0
+    unresolved_four_threat = (
+        before_opp["winning_actions"] == 0
+        and after_opp["winning_actions"] == 0
+        and before_opp["live_four"] + before_opp["rush_four"] > 0
+        and after_opp["live_four"] + after_opp["rush_four"] >= before_opp["live_four"] + before_opp["rush_four"]
+    )
+
     if before_opp["winning_actions"] > 0 and after_opp["winning_actions"] == 0:
         reward += CRITICAL_REWARD
     elif before_opp["live_four"] + before_opp["rush_four"] > after_opp["live_four"] + after_opp["rush_four"]:
@@ -325,10 +367,17 @@ def evaluate_shape_reward(board_before: np.ndarray, board_after: np.ndarray, row
     elif before_opp["live_three"] > after_opp["live_three"]:
         reward += SHAPE_REWARD
 
+    if unresolved_winning_threat:
+        reward -= UNRESOLVED_WINNING_THREAT_PENALTY
+    elif unresolved_four_threat:
+        reward -= UNRESOLVED_FOUR_THREAT_PENALTY
+
     info = {
         "self_pattern": mine,
         "offense_delta": offense_delta,
         "defense_delta": defense_delta,
+        "unresolved_winning_threat": unresolved_winning_threat,
+        "unresolved_four_threat": unresolved_four_threat,
         "self_threats_after": after_self,
         "opp_threats_before": before_opp,
         "opp_threats_after": after_opp,

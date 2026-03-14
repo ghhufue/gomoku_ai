@@ -25,7 +25,7 @@ n_envs = 16
 n_steps = 64
 
 # 本次训练额外执行的 PPO update 数。
-updates = 60
+updates = 300
 
 # PPO 小批量大小。
 batch_size = 512

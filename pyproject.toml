@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68", "wheel", "pybind11>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,7 @@ description = "Initial Gomoku PPO training prototype"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
+    "pybind11>=3.0",
     "pytest>=8.3",
     "setuptools<81",
     "tensorboard>=2.18",
