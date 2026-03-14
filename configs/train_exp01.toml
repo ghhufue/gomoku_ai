@@ -1,0 +1,85 @@
+# 五子棋 PPO 第一次正式训练配置。
+# 目标：先验证模型是否开始稳定学会对当前 Rule Bot 的基础攻防。
+
+[runtime]
+# 设备。设为 "auto" 时优先使用 CUDA。
+device = "auto"
+
+# 训练随机种子。
+seed = 42
+
+# 所有 run 的根目录。
+run_root = "runs"
+
+# 固定实验名。留空可自动生成时间戳。
+run_name = "exp01_formal"
+
+# 恢复训练的 checkpoint 路径。第一次正式训练先留空。
+resume_from = ""
+
+[training]
+# 并行环境数量。第一次正式训练适当拉高，提高采样效率。
+n_envs = 16
+
+# 每个环境每次 PPO 更新前采样的步数。
+n_steps = 64
+
+# 本次训练额外执行的 PPO update 数。
+updates = 60
+
+# PPO 小批量大小。
+batch_size = 512
+
+# 每次 PPO update 的优化轮数。
+epochs = 4
+
+# 学习率。
+lr = 0.0003
+
+# 是否显示训练进度条和中间输出。
+show_progress = true
+
+[evaluation]
+# 每 5 次 update 做一次聚合评估，保证训练期间更快看到验证结果。
+eval_every = 5
+
+# 每个评估 seed 对局 20 盘。
+eval_games = 20
+
+# 每次评估使用 3 个不同 seed，减少偶然波动。
+eval_seeds = 3
+
+[artifacts]
+# TensorBoard 日志目录。
+tensorboard_dir = "tensorboard"
+
+# 周期 checkpoint 目录。
+checkpoint_dir = "checkpoints"
+
+# 最终模型文件名。
+final_model_name = "final_model.pt"
+
+# 最近评估结果文件名。
+latest_eval_name = "latest_eval.json"
+
+# run 清单文件名。
+manifest_name = "manifest.json"
+
+[checkpoint]
+# 每 10 次 update 保存一个周期 checkpoint。
+save_every = 10
+
+# 始终保留聚合评估下的最佳模型。
+keep_best_model = true
+
+# 最佳模型文件名。
+best_model_name = "best_model.pt"
+
+# 训练结束时保留最终模型。
+keep_final_model = true
+
+# 周期 checkpoint 只保留最近 6 个。
+keep_last = 6
+
+# 每 30 个 update 作为里程碑 checkpoint 永远保留。
+keep_milestone_every = 30

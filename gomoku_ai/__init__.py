@@ -1,0 +1,2 @@
+"""Initial Gomoku PPO prototype."""
+

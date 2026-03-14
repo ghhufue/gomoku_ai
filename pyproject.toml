@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gomoku-ai"
+version = "0.1.0"
+description = "Initial Gomoku PPO training prototype"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pytest>=8.3",
+    "setuptools<81",
+    "tensorboard>=2.18",
+    "torch==2.10.0+cu128",
+    "tqdm>=4.67",
+]
+
+[tool.setuptools.packages.find]
+include = ["gomoku_ai*"]
