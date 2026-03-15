@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shutil
 import sys
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -72,6 +73,119 @@ def cleanup_latest_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_test_command(args: argparse.Namespace) -> int:
+    from tests.test_env import main as test_env_main
+
+    if args.list_cases:
+        return test_env_main(["--list-cases"])
+
+    argv: list[str] = []
+    for case_id in args.case_id:
+        argv.extend(["--case-id", str(case_id)])
+    for case_name in args.case:
+        argv.extend(["--case", case_name])
+    return test_env_main(argv)
+
+
+REWARD_FIELD_LABELS = {
+    "terminal_reward": "终局奖励：当前落子直接成五时给分。",
+    "live_four_reward": "活四奖励：形成活四时给分。",
+    "rush_four_reward": "冲四奖励：形成冲四时给分。",
+    "critical_reward": "关键奖励：解除对手立即制胜点时给分。",
+    "shape_reward": "棋形奖励：形成活三或削弱对手活三时给分。",
+    "sleep_three_reward": "眠三奖励：形成眠三时给分。",
+    "probe_reward": "试探奖励：形成活二时给分。",
+    "step_penalty": "基础步惩罚：每步固定扣分，抑制无意义拖延。",
+    "unresolved_winning_threat_penalty": "未解除对手立即制胜威胁时的重罚。",
+    "unresolved_four_threat_penalty": "未缓解对手四威胁时的惩罚。",
+    "unresolved_live_three_threat_penalty": "未缓解对手活三前驱威胁时的惩罚。",
+    "summary_winning_actions_weight": "threat_summary 中立即制胜点的权重。",
+    "summary_live_four_weight": "threat_summary 中活四的权重。",
+    "summary_rush_four_weight": "threat_summary 中冲四的权重。",
+    "summary_live_three_weight": "threat_summary 中活三的权重。",
+    "summary_sleep_three_weight": "threat_summary 中眠三的权重。",
+    "summary_live_two_weight": "threat_summary 中活二的权重。",
+    "live_two_contiguous_scale": "活二中连续两子的缩放系数。",
+    "live_two_gap1_scale": "活二中间隔 1 格时的缩放系数。",
+    "live_two_gap2_scale": "活二中间隔 2 格时的缩放系数。",
+    "live_three_contiguous_scale": "活三中连续三子的缩放系数。",
+    "live_three_gap1_scale": "活三中间隔 1 格时的缩放系数。",
+    "live_three_gap2_scale": "活三中间隔 2 格时的缩放系数。",
+    "sleep_three_contiguous_scale": "死三中连续三子的缩放系数。",
+    "sleep_three_gap1_scale": "死三中间隔 1 格时的缩放系数。",
+    "sleep_three_gap2_scale": "死三中间隔 2 格时的缩放系数。",
+    "live_four_contiguous_scale": "活四中连续四子的缩放系数。",
+    "live_four_gap1_scale": "活四中间隔 1 格时的缩放系数。",
+    "rush_four_contiguous_scale": "死四中连续四子的缩放系数。",
+    "rush_four_gap1_scale": "死四中间隔 1 格时的缩放系数。",
+    "offense_delta_scale": "我方威胁增量转成奖励时的缩放系数。",
+    "offense_delta_limit": "我方进攻增量奖励的上限。",
+    "defense_delta_scale": "对手威胁下降转成奖励时的缩放系数。",
+    "defense_delta_limit": "防守增量奖励的上限。",
+    "double_live_three_bonus": "形成双活三时追加的奖励。",
+    "block_live_four_bonus": "成功削弱对手四威胁时追加的奖励。",
+}
+
+REWARD_SECTION_TITLES = {
+    "base": "Base",
+    "defense": "Defense",
+    "offense": "Offense",
+    "weights": "Weights",
+}
+
+
+def normalize_reward_sections(reward_payload: dict[str, object]) -> dict[str, dict[str, object]]:
+    reward_root = reward_payload.get("reward", reward_payload)
+    sections: dict[str, dict[str, object]] = {}
+    for section_name in ("base", "defense", "offense", "weights"):
+        section_payload = reward_root.get(section_name, {})
+        if isinstance(section_payload, dict):
+            sections[section_name] = section_payload
+    if sections:
+        return sections
+    return {"base": reward_payload}
+
+
+def build_reward_table_markdown(reward_payload: dict[str, object], source_path: Path) -> str:
+    grouped_payload = normalize_reward_sections(reward_payload)
+    lines = [
+        "# Reward 配置表",
+        "",
+        f"- 源文件：`{source_path}`",
+        "",
+    ]
+    for section_name, section_payload in grouped_payload.items():
+        lines.extend(
+            [
+                f"## `{section_name}` / {REWARD_SECTION_TITLES.get(section_name, section_name.title())}",
+                "",
+                "| 参数名 | 当前值 | 含义 |",
+                "|---|---:|---|",
+            ]
+        )
+        for key, value in section_payload.items():
+            meaning = REWARD_FIELD_LABELS.get(key, "未补充说明。")
+            lines.append(f"| `{key}` | `{value}` | {meaning} |")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def run_reward_table_command(args: argparse.Namespace) -> int:
+    reward_path = args.reward.resolve()
+    if not reward_path.exists():
+        print(f"reward config not found: {reward_path}")
+        return 1
+
+    reward_payload = tomllib.loads(reward_path.read_text(encoding="utf-8"))
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{reward_path.stem}_table.md"
+    markdown = build_reward_table_markdown(reward_payload, reward_path)
+    output_path.write_text(markdown, encoding="utf-8")
+    print(f"generated reward table: {output_path}")
+    return 0
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run management tools for Gomoku AI.",
@@ -88,6 +202,46 @@ def make_parser() -> argparse.ArgumentParser:
     )
     cleanup_parser.add_argument("--run-root", type=Path, default=Path("runs"), help="Run root directory.")
     cleanup_parser.add_argument("--yes", action="store_true", help="Actually perform the deletion.")
+
+    test_parser = subparsers.add_parser(
+        "test",
+        help="Run env tests, or print a single reward case with board/reward breakdown.",
+    )
+    test_parser.add_argument(
+        "--case",
+        action="append",
+        default=[],
+        help="Named debug case from tests/test_env.py. Repeatable.",
+    )
+    test_parser.add_argument(
+        "--case-id",
+        action="append",
+        type=int,
+        default=[],
+        help="Numbered test case from tests/TEST_CASES.md. Repeatable.",
+    )
+    test_parser.add_argument(
+        "--list-cases",
+        action="store_true",
+        help="List available debug cases for `--case`.",
+    )
+
+    reward_table_parser = subparsers.add_parser(
+        "reward-table",
+        help="Convert a reward TOML config into a Markdown table under outputs/visual.",
+    )
+    reward_table_parser.add_argument(
+        "--reward",
+        type=Path,
+        default=Path("configs/reward.toml"),
+        help="Reward TOML path.",
+    )
+    reward_table_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/visual"),
+        help="Output directory for generated Markdown.",
+    )
 
     return parser
 
@@ -106,6 +260,12 @@ def main() -> int:
 
     if args.command == "cleanup-latest-run":
         return cleanup_latest_run(args)
+
+    if args.command == "test":
+        return run_test_command(args)
+
+    if args.command == "reward-table":
+        return run_reward_table_command(args)
 
     parser.print_help()
     return 1

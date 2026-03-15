@@ -1,0 +1,111 @@
+[reward.base]
+# 终局奖励：当前落子直接成五时给予的奖励。
+terminal_reward = 1000.0
+
+# 活四奖励：形成活四时给予的高奖励。
+live_four_reward = 100.0
+
+# 冲四奖励：形成冲四时给予的奖励，通常低于活四。
+rush_four_reward = 50.0
+
+# 关键奖励：成功解除对手立即制胜点时给予的高奖励。
+critical_reward = 100.0
+
+# 棋形奖励：形成活三，或成功削弱对手活三时给予的基础奖励。
+shape_reward = 20.0
+
+# 眠三奖励：形成眠三时给予的小额奖励。
+sleep_three_reward = 8.0
+
+# 试探奖励：形成活二时给予的小额奖励。
+probe_reward = 5.0
+
+# 每走一步的基础惩罚。
+step_penalty = -1.0
+
+[reward.defense]
+# 未解除对手“下一手即可成五”的威胁时施加的重罚。
+unresolved_winning_threat_penalty = 120.0
+
+# 未充分缓解对手活四 / 冲四级威胁时施加的惩罚。
+unresolved_four_threat_penalty = 45.0
+
+# 未缓解对手活三前驱威胁时施加的惩罚。
+unresolved_live_three_threat_penalty = 35.0
+
+# 成功削弱对手活四 / 冲四总量时给予的额外奖励。
+block_live_four_bonus = 30.0
+
+[reward.offense]
+# 同时形成“双活三”时，在 shape_reward 基础上额外追加的奖励。
+double_live_three_bonus = 10.0
+
+# 我方威胁增量转成奖励时的缩放系数。
+offense_delta_scale = 0.12
+
+# 我方进攻增量奖励的最大值。
+offense_delta_limit = 40.0
+
+# 对手威胁下降转成奖励时的缩放系数。
+defense_delta_scale = 0.15
+
+# 防守增量奖励的最大值。
+defense_delta_limit = 60.0
+
+[reward.weights]
+# threat_summary 中立即制胜点的权重。
+summary_winning_actions_weight = 80.0
+
+# threat_summary 中活四的权重。
+summary_live_four_weight = 30.0
+
+# threat_summary 中冲四的权重。
+summary_rush_four_weight = 18.0
+
+# threat_summary 中活三的权重。
+summary_live_three_weight = 8.0
+
+# threat_summary 中眠三的权重。
+summary_sleep_three_weight = 3.0
+
+# threat_summary 中活二的权重。
+summary_live_two_weight = 1.0
+
+# 活二：两个连续相连时的系数。
+live_two_contiguous_scale = 1.0
+
+# 活二：中间空 1 格时的系数。
+live_two_gap1_scale = 0.5
+
+# 活二：中间空 2 格时的系数。
+live_two_gap2_scale = 0.15
+
+# 活三：三个连续相连时的系数。
+live_three_contiguous_scale = 1.0
+
+# 活三：中间空 1 格时的系数。
+live_three_gap1_scale = 0.7
+
+# 活三：中间空 2 格时的系数。
+live_three_gap2_scale = 0.3
+
+# 死三：三个连续相连时的系数。
+sleep_three_contiguous_scale = 1.0
+
+# 死三：中间空 1 格时的系数。
+sleep_three_gap1_scale = 0.7
+
+# 死三：中间空 2 格时的系数。
+sleep_three_gap2_scale = 0.3
+
+# 活四：四个连续相连时的系数。
+live_four_contiguous_scale = 1.0
+
+# 活四：任意空 1 格时的系数。
+live_four_gap1_scale = 0.5
+
+# 死四：四个连续相连时的系数。
+rush_four_contiguous_scale = 1.0
+
+# 死四：任意空 1 格时的系数。
+rush_four_gap1_scale = 0.5

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import shutil
 from pathlib import Path
 
@@ -26,8 +27,8 @@ ext_modules = [
         [str(ROOT / "cpp" / "gomoku_core.cpp")],
         include_dirs=[pybind11.get_include()],
         language="c++",
-        extra_compile_args=["-O3"],
-        extra_link_args=["-static-libstdc++", "-static-libgcc"],
+        extra_compile_args=["/std:c++17", "/O2"] if sys.platform == "win32" else ["-std=c++17", "-O3"],
+        extra_link_args=[] if sys.platform == "win32" else ["-static-libstdc++", "-static-libgcc"],
     )
 ]
 

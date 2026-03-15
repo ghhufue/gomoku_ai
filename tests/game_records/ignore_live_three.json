@@ -1,0 +1,12 @@
+{
+  "name": "ignore_live_three",
+  "description": "白棋先在中路形成活三前驱压力，黑棋后续没有及时处理。",
+  "moves": [
+    {"row": 7, "col": 6, "color": "white", "source": "sample"},
+    {"row": 10, "col": 10, "color": "black", "source": "sample"},
+    {"row": 7, "col": 7, "color": "white", "source": "sample"},
+    {"row": 10, "col": 11, "color": "black", "source": "sample"},
+    {"row": 7, "col": 8, "color": "white", "source": "sample"},
+    {"row": 11, "col": 10, "color": "black", "source": "sample"}
+  ]
+}

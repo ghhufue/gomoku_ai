@@ -9,6 +9,7 @@ from gomoku_ai.cpp_backend import (
     BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE,
     affected_actions as cpp_affected_actions,
     classify_move_counts as cpp_classify_move_counts,
+    classify_move_shape_details as cpp_classify_move_shape_details,
     immediate_winning_actions as cpp_immediate_winning_actions,
     threat_summary as cpp_threat_summary,
 )
@@ -35,6 +36,7 @@ PATTERN_KEYS = ("winning_actions", "live_four", "rush_four", "live_three", "slee
 
 LIVE_FOUR_PATTERNS = {"_XXXX_", "_XXX_X_", "_XX_XX_", "_X_XXX_"}
 LIVE_THREE_PATTERNS = {"_XXX_", "_XX_X_", "_X_XX_"}
+DETAILED_LIVE_THREE_PATTERNS = LIVE_THREE_PATTERNS | {"_XX__X_", "_X__XX_"}
 SLEEP_THREE_PATTERNS = {
     "OXXX__",
     "__XXXO",
@@ -44,6 +46,16 @@ SLEEP_THREE_PATTERNS = {
     "_XX_XO",
     "OXX_X_",
     "_X_XXO",
+}
+DETAILED_SLEEP_THREE_PATTERNS = SLEEP_THREE_PATTERNS | {
+    "OXX__X",
+    "X__XXO",
+    "OX__XX",
+    "XX__XO",
+    "OXX__X_",
+    "_X__XXO",
+    "OX__XX_",
+    "_XX__XO",
 }
 LIVE_TWO_PATTERNS = {
     "_XX_",
@@ -74,6 +86,51 @@ class StepResult:
     reward: float
     done: bool
     info: dict
+
+
+@dataclass(frozen=True)
+class RewardConfig:
+    terminal_reward: float = TERMINAL_REWARD
+    live_four_reward: float = CRITICAL_REWARD
+    rush_four_reward: float = 50.0
+    critical_reward: float = CRITICAL_REWARD
+    shape_reward: float = SHAPE_REWARD
+    sleep_three_reward: float = 8.0
+    probe_reward: float = PROBE_REWARD
+    step_penalty: float = STEP_PENALTY
+    unresolved_winning_threat_penalty: float = UNRESOLVED_WINNING_THREAT_PENALTY
+    unresolved_four_threat_penalty: float = UNRESOLVED_FOUR_THREAT_PENALTY
+    unresolved_live_three_threat_penalty: float = 35.0
+    summary_winning_actions_weight: float = 80.0
+    summary_live_four_weight: float = 30.0
+    summary_rush_four_weight: float = 18.0
+    summary_live_three_weight: float = 8.0
+    summary_sleep_three_weight: float = 3.0
+    summary_live_two_weight: float = 1.0
+    live_two_contiguous_scale: float = 1.0
+    live_two_gap1_scale: float = 0.5
+    live_two_gap2_scale: float = 0.15
+    live_three_contiguous_scale: float = 1.0
+    live_three_gap1_scale: float = 0.7
+    live_three_gap2_scale: float = 0.3
+    sleep_three_contiguous_scale: float = 1.0
+    sleep_three_gap1_scale: float = 0.7
+    sleep_three_gap2_scale: float = 0.3
+    live_four_contiguous_scale: float = 1.0
+    live_four_gap1_scale: float = 0.5
+    rush_four_contiguous_scale: float = 1.0
+    rush_four_gap1_scale: float = 0.5
+    offense_delta_scale: float = 0.12
+    offense_delta_limit: float = 40.0
+    defense_delta_scale: float = 0.15
+    defense_delta_limit: float = 60.0
+    double_live_three_bonus: float = 10.0
+    block_live_four_bonus: float = 30.0
+
+
+DEFAULT_REWARD_CONFIG = RewardConfig()
+
+SHAPE_FAMILIES = ("live_two", "live_three", "sleep_three", "live_four", "rush_four")
 
 
 def empty_pattern_summary() -> dict[str, int]:
@@ -158,7 +215,133 @@ def analyze_direction(board: np.ndarray, row: int, col: int, dr: int, dc: int, p
         if window in LIVE_TWO_PATTERNS:
             live_two = 1
 
+    if live_four:
+        rush_four = 0
+
     return (0, live_four, rush_four, live_three, sleep_three, live_two)
+
+
+def gap_bucket(window: str) -> str:
+    positions = [index for index, symbol in enumerate(window) if symbol == "X"]
+    if len(positions) <= 1:
+        return "contiguous"
+    internal_empties = positions[-1] - positions[0] + 1 - len(positions)
+    if internal_empties <= 0:
+        return "contiguous"
+    if internal_empties == 1:
+        return "gap1"
+    return "gap2"
+
+
+def shape_scale(reward_config: RewardConfig, family: str, bucket: str) -> float:
+    return float(getattr(reward_config, f"{family}_{bucket}_scale"))
+
+
+def evaluate_window_family(window: str) -> tuple[str, str] | None:
+    stones = window.count("X")
+    empties = window.count("_")
+
+    if window in LIVE_FOUR_PATTERNS:
+        return ("live_four", gap_bucket(window))
+    if stones == 4 and empties == 1:
+        return ("rush_four", gap_bucket(window))
+    if window in DETAILED_LIVE_THREE_PATTERNS:
+        return ("live_three", gap_bucket(window))
+    if window in DETAILED_SLEEP_THREE_PATTERNS:
+        return ("sleep_three", gap_bucket(window))
+    if window in LIVE_TWO_PATTERNS:
+        return ("live_two", gap_bucket(window))
+    return None
+
+
+def analyze_direction_shape_scales(
+    board: np.ndarray,
+    row: int,
+    col: int,
+    dr: int,
+    dc: int,
+    player: int,
+    reward_config: RewardConfig,
+) -> dict[str, dict[str, object]]:
+    line, _ = direction_line(board, row, col, dr, dc, player, ANALYZE_RADIUS)
+    details = {
+        family: {"scale": 0.0, "bucket": "", "window": ""}
+        for family in SHAPE_FAMILIES
+    }
+
+    for start, end in ANALYZE_WINDOW_SPANS:
+        window = line[start:end]
+        result = evaluate_window_family(window)
+        if result is None:
+            continue
+        family, bucket = result
+        scale = shape_scale(reward_config, family, bucket)
+        if scale > float(details[family]["scale"]):
+            details[family] = {"scale": scale, "bucket": bucket, "window": window}
+
+    if details["live_four"]["scale"] > 0.0:
+        details["rush_four"] = {"scale": 0.0, "bucket": None, "window": None}
+    return details
+
+
+def _py_classify_move_shape_details(
+    board: np.ndarray,
+    row: int,
+    col: int,
+    player: int,
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+) -> dict[str, object]:
+    direction_details: list[dict[str, object]] = []
+    family_totals = {family: 0.0 for family in SHAPE_FAMILIES}
+    active_directions = {family: 0 for family in SHAPE_FAMILIES}
+
+    for dr, dc in DIRS:
+        shape_details = analyze_direction_shape_scales(board, row, col, dr, dc, player, reward_config)
+        direction_entry = {"direction": (dr, dc)}
+        for family in SHAPE_FAMILIES:
+            scale = float(shape_details[family]["scale"])
+            direction_entry[family] = {
+                "scale": scale,
+                "bucket": shape_details[family]["bucket"],
+                "window": shape_details[family]["window"],
+            }
+            family_totals[family] += scale
+            if scale > 0.0:
+                active_directions[family] += 1
+        direction_details.append(direction_entry)
+
+    return {
+        "family_totals": family_totals,
+        "active_directions": active_directions,
+        "directions": direction_details,
+    }
+
+
+def classify_move_shape_details(
+    board: np.ndarray,
+    row: int,
+    col: int,
+    player: int,
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+) -> dict[str, object]:
+    if CPP_BACKEND_AVAILABLE:
+        scales = {
+            "live_two_contiguous_scale": reward_config.live_two_contiguous_scale,
+            "live_two_gap1_scale": reward_config.live_two_gap1_scale,
+            "live_two_gap2_scale": reward_config.live_two_gap2_scale,
+            "live_three_contiguous_scale": reward_config.live_three_contiguous_scale,
+            "live_three_gap1_scale": reward_config.live_three_gap1_scale,
+            "live_three_gap2_scale": reward_config.live_three_gap2_scale,
+            "sleep_three_contiguous_scale": reward_config.sleep_three_contiguous_scale,
+            "sleep_three_gap1_scale": reward_config.sleep_three_gap1_scale,
+            "sleep_three_gap2_scale": reward_config.sleep_three_gap2_scale,
+            "live_four_contiguous_scale": reward_config.live_four_contiguous_scale,
+            "live_four_gap1_scale": reward_config.live_four_gap1_scale,
+            "rush_four_contiguous_scale": reward_config.rush_four_contiguous_scale,
+            "rush_four_gap1_scale": reward_config.rush_four_gap1_scale,
+        }
+        return cpp_classify_move_shape_details(board, row, col, player, scales)
+    return _py_classify_move_shape_details(board, row, col, player, reward_config)
 
 
 def pattern_tuple_to_dict(pattern: tuple[int, int, int, int, int, int]) -> dict[str, int | bool]:
@@ -301,14 +484,14 @@ def apply_local_threat_delta(
     return updated
 
 
-def summary_score(summary: dict[str, int]) -> float:
+def summary_score(summary: dict[str, int], reward_config: RewardConfig = DEFAULT_REWARD_CONFIG) -> float:
     return (
-        summary["winning_actions"] * 80.0
-        + summary["live_four"] * 30.0
-        + summary["rush_four"] * 18.0
-        + summary["live_three"] * 8.0
-        + summary["sleep_three"] * 3.0
-        + summary["live_two"] * 1.0
+        summary["winning_actions"] * reward_config.summary_winning_actions_weight
+        + summary["live_four"] * reward_config.summary_live_four_weight
+        + summary["rush_four"] * reward_config.summary_rush_four_weight
+        + summary["live_three"] * reward_config.summary_live_three_weight
+        + summary["sleep_three"] * reward_config.summary_sleep_three_weight
+        + summary["live_two"] * reward_config.summary_live_two_weight
     )
 
 
@@ -316,61 +499,127 @@ def clamp_bonus(value: float, limit: float) -> float:
     return max(-limit, min(limit, value))
 
 
-def move_pattern_reward(pattern: dict[str, int | bool]) -> float:
+def move_pattern_reward(
+    pattern: dict[str, int | bool],
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+    shape_details: dict[str, object] | None = None,
+) -> float:
     if pattern["five"]:
-        return TERMINAL_REWARD
-    if pattern["live_four"] or pattern["rush_four"]:
-        return CRITICAL_REWARD
-    if int(pattern["live_three"]) >= 2:
-        return SHAPE_REWARD + 10.0
-    if pattern["live_three"]:
-        return SHAPE_REWARD
-    if pattern["sleep_three"]:
-        return 8.0
-    if pattern["live_two"]:
-        return PROBE_REWARD
-    return 0.0
+        return reward_config.terminal_reward
+
+    if shape_details is None:
+        family_totals = {
+            "live_two": float(pattern["live_two"]),
+            "live_three": float(pattern["live_three"]),
+            "sleep_three": float(pattern["sleep_three"]),
+            "live_four": float(pattern["live_four"]),
+            "rush_four": float(pattern["rush_four"]),
+        }
+        active_directions = {
+            "live_two": int(pattern["live_two"] > 0),
+            "live_three": int(pattern["live_three"] > 0),
+            "sleep_three": int(pattern["sleep_three"] > 0),
+            "live_four": int(pattern["live_four"] > 0),
+            "rush_four": int(pattern["rush_four"] > 0),
+        }
+    else:
+        family_totals = shape_details["family_totals"]
+        active_directions = shape_details["active_directions"]
+
+    reward = 0.0
+    reward += reward_config.live_four_reward * float(family_totals["live_four"])
+    reward += reward_config.rush_four_reward * float(family_totals["rush_four"])
+    reward += reward_config.shape_reward * float(family_totals["live_three"])
+    reward += reward_config.sleep_three_reward * float(family_totals["sleep_three"])
+    reward += reward_config.probe_reward * float(family_totals["live_two"])
+
+    if int(active_directions["live_three"]) >= 2:
+        reward += reward_config.double_live_three_bonus
+    return reward
 
 
-def evaluate_shape_reward(board_before: np.ndarray, board_after: np.ndarray, row: int, col: int, player: int) -> tuple[float, dict[str, object]]:
+def evaluate_shape_reward(
+    board_before: np.ndarray,
+    board_after: np.ndarray,
+    row: int,
+    col: int,
+    player: int,
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+) -> tuple[float, dict[str, object]]:
     mine_counts = classify_move_counts(board_after, row, col, player)
     if mine_counts[FIVE_IDX]:
-        return TERMINAL_REWARD, {"self_pattern": pattern_tuple_to_dict(mine_counts)}
+        return reward_config.terminal_reward, {
+            "self_pattern": pattern_tuple_to_dict(mine_counts),
+            "reward_components": {
+                "terminal_reward": reward_config.terminal_reward,
+                "total_reward": reward_config.terminal_reward,
+            },
+        }
 
     mine = pattern_tuple_to_dict(mine_counts)
+    move_shape_details = classify_move_shape_details(board_after, row, col, player, reward_config)
 
     before_self = threat_summary(board_before, player)
     before_opp = threat_summary(board_before, -player)
     after_self = apply_local_threat_delta(board_before, board_after, row, col, player, before_self)
     after_opp = apply_local_threat_delta(board_before, board_after, row, col, -player, before_opp)
 
-    reward = STEP_PENALTY
-    reward += move_pattern_reward(mine)
+    step_penalty = reward_config.step_penalty
+    move_reward = move_pattern_reward(mine, reward_config, move_shape_details)
+    reward = step_penalty + move_reward
 
-    offense_delta = summary_score(after_self) - summary_score(before_self)
-    defense_delta = summary_score(before_opp) - summary_score(after_opp)
-    reward += clamp_bonus(offense_delta * 0.12, 40.0)
-    reward += clamp_bonus(defense_delta * 0.15, 60.0)
+    offense_delta = summary_score(after_self, reward_config) - summary_score(before_self, reward_config)
+    defense_delta = summary_score(before_opp, reward_config) - summary_score(after_opp, reward_config)
+    offense_bonus = clamp_bonus(offense_delta * reward_config.offense_delta_scale, reward_config.offense_delta_limit)
+    defense_bonus = clamp_bonus(defense_delta * reward_config.defense_delta_scale, reward_config.defense_delta_limit)
+    reward += offense_bonus
+    reward += defense_bonus
 
     unresolved_winning_threat = before_opp["winning_actions"] > 0 and after_opp["winning_actions"] > 0
     unresolved_four_threat = (
         before_opp["winning_actions"] == 0
         and after_opp["winning_actions"] == 0
         and before_opp["live_four"] + before_opp["rush_four"] > 0
-        and after_opp["live_four"] + after_opp["rush_four"] >= before_opp["live_four"] + before_opp["rush_four"]
+        and (
+            after_opp["live_four"] + after_opp["rush_four"] > before_opp["live_four"] + before_opp["rush_four"]
+            or (
+                after_opp["live_four"] + after_opp["rush_four"] == before_opp["live_four"] + before_opp["rush_four"]
+                and after_opp["live_four"] >= before_opp["live_four"]
+            )
+        )
+    )
+    unresolved_live_three_threat = (
+        before_opp["winning_actions"] == 0
+        and before_opp["live_four"] > 0
+        and before_opp["rush_four"] == 0
+        and after_opp["live_four"] >= before_opp["live_four"]
     )
 
+    block_winning_bonus = 0.0
+    block_four_bonus = 0.0
+    block_live_three_bonus = 0.0
     if before_opp["winning_actions"] > 0 and after_opp["winning_actions"] == 0:
-        reward += CRITICAL_REWARD
+        block_winning_bonus = reward_config.critical_reward
+        reward += block_winning_bonus
     elif before_opp["live_four"] + before_opp["rush_four"] > after_opp["live_four"] + after_opp["rush_four"]:
-        reward += 30.0
+        block_four_bonus = reward_config.block_live_four_bonus
+        reward += block_four_bonus
     elif before_opp["live_three"] > after_opp["live_three"]:
-        reward += SHAPE_REWARD
+        block_live_three_bonus = reward_config.shape_reward
+        reward += block_live_three_bonus
 
+    unresolved_winning_penalty = 0.0
+    unresolved_four_penalty = 0.0
+    unresolved_live_three_penalty = 0.0
     if unresolved_winning_threat:
-        reward -= UNRESOLVED_WINNING_THREAT_PENALTY
+        unresolved_winning_penalty = reward_config.unresolved_winning_threat_penalty
+        reward -= unresolved_winning_penalty
     elif unresolved_four_threat:
-        reward -= UNRESOLVED_FOUR_THREAT_PENALTY
+        unresolved_four_penalty = reward_config.unresolved_four_threat_penalty
+        reward -= unresolved_four_penalty
+    elif unresolved_live_three_threat:
+        unresolved_live_three_penalty = reward_config.unresolved_live_three_threat_penalty
+        reward -= unresolved_live_three_penalty
 
     info = {
         "self_pattern": mine,
@@ -378,9 +627,34 @@ def evaluate_shape_reward(board_before: np.ndarray, board_after: np.ndarray, row
         "defense_delta": defense_delta,
         "unresolved_winning_threat": unresolved_winning_threat,
         "unresolved_four_threat": unresolved_four_threat,
+        "unresolved_live_three_threat": unresolved_live_three_threat,
         "self_threats_after": after_self,
         "opp_threats_before": before_opp,
         "opp_threats_after": after_opp,
+        "move_shape_details": move_shape_details,
+        "reward_components": {
+            "step_penalty": step_penalty,
+            "move_reward": move_reward,
+            "move_live_two_bonus": reward_config.probe_reward * float(move_shape_details["family_totals"]["live_two"]),
+            "move_live_three_bonus": reward_config.shape_reward * float(move_shape_details["family_totals"]["live_three"]),
+            "move_sleep_three_bonus": reward_config.sleep_three_reward * float(move_shape_details["family_totals"]["sleep_three"]),
+            "move_live_four_bonus": reward_config.live_four_reward * float(move_shape_details["family_totals"]["live_four"]),
+            "move_rush_four_bonus": reward_config.rush_four_reward * float(move_shape_details["family_totals"]["rush_four"]),
+            "move_double_live_three_bonus": (
+                reward_config.double_live_three_bonus
+                if int(move_shape_details["active_directions"]["live_three"]) >= 2
+                else 0.0
+            ),
+            "offense_bonus": offense_bonus,
+            "defense_bonus": defense_bonus,
+            "block_winning_bonus": block_winning_bonus,
+            "block_four_bonus": block_four_bonus,
+            "block_live_three_bonus": block_live_three_bonus,
+            "unresolved_winning_penalty": -unresolved_winning_penalty,
+            "unresolved_four_penalty": -unresolved_four_penalty,
+            "unresolved_live_three_penalty": -unresolved_live_three_penalty,
+            "total_reward": reward,
+        },
     }
     return reward, info
 
@@ -388,12 +662,18 @@ def evaluate_shape_reward(board_before: np.ndarray, board_after: np.ndarray, row
 class GomokuEnv:
     """Single-agent environment where the agent plays against a built-in opponent."""
 
-    def __init__(self, opponent, seed: int | None = None):
+    def __init__(
+        self,
+        opponent,
+        seed: int | None = None,
+        reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+    ):
         self.opponent = opponent
         self.rng = np.random.default_rng(seed)
         self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
         self.agent_player = BLACK
         self.done = False
+        self.reward_config = reward_config
 
     def reset(self) -> tuple[np.ndarray, np.ndarray]:
         self.board.fill(EMPTY)
@@ -429,14 +709,21 @@ class GomokuEnv:
             return StepResult(
                 self.observation(),
                 self.action_mask(),
-                -TERMINAL_REWARD,
+                -self.reward_config.terminal_reward,
                 True,
                 {"illegal_move": True, "agent_result": "loss"},
             )
 
         before = self.board.copy()
         self.board[row, col] = self.agent_player
-        reward, reward_info = evaluate_shape_reward(before, self.board, row, col, self.agent_player)
+        reward, reward_info = evaluate_shape_reward(
+            before,
+            self.board,
+            row,
+            col,
+            self.agent_player,
+            reward_config=self.reward_config,
+        )
         info.update(reward_info)
 
         mine = reward_info["self_pattern"]
@@ -468,7 +755,13 @@ class GomokuEnv:
             self.done = True
             info["winner"] = -self.agent_player
             info["agent_result"] = "loss"
-            return StepResult(self.observation(), self.action_mask(), reward - TERMINAL_REWARD, True, info)
+            return StepResult(
+                self.observation(),
+                self.action_mask(),
+                reward - self.reward_config.terminal_reward,
+                True,
+                info,
+            )
 
         if not np.any(self.board == EMPTY):
             self.done = True

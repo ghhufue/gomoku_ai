@@ -31,3 +31,9 @@ def affected_actions(board, row: int, col: int, radius: int = 5):
     if _backend is None:
         raise RuntimeError("C++ backend is not available")
     return list(_backend.affected_actions(board, row, col, radius))
+
+
+def classify_move_shape_details(board, row: int, col: int, player: int, scales: dict[str, float]):
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    return _backend.classify_move_shape_details(board, row, col, player, scales)

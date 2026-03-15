@@ -1,0 +1,15 @@
+{
+  "name": "model_loss_line",
+  "description": "来自现有对局记录的样例，黑棋或白棋在中路连续施压。",
+  "moves": [
+    {"row": 7, "col": 7, "color": "black", "source": "bot"},
+    {"row": 9, "col": 6, "color": "white", "source": "model"},
+    {"row": 6, "col": 7, "color": "black", "source": "bot"},
+    {"row": 11, "col": 8, "color": "white", "source": "model"},
+    {"row": 8, "col": 7, "color": "black", "source": "bot"},
+    {"row": 10, "col": 7, "color": "white", "source": "model"},
+    {"row": 5, "col": 7, "color": "black", "source": "bot"},
+    {"row": 8, "col": 5, "color": "white", "source": "model"},
+    {"row": 9, "col": 7, "color": "black", "source": "bot"}
+  ]
+}

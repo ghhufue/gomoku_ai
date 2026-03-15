@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import GomokuEnv, VectorEnv
+from gomoku_ai.env import DEFAULT_REWARD_CONFIG, GomokuEnv, RewardConfig, VectorEnv
 from gomoku_ai.model import ActorCriticNet
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 from gomoku_ai.run_registry import update_registry
@@ -89,6 +89,38 @@ def load_resume_state(
 
 def load_config(config_path: Path) -> dict:
     return tomllib.loads(config_path.read_text(encoding="utf-8"))
+
+
+def load_reward_config(config_path: Path | None) -> dict | None:
+    if config_path is None:
+        return None
+    return tomllib.loads(config_path.read_text(encoding="utf-8"))
+
+
+def flatten_reward_payload(raw_reward: dict | None) -> dict | None:
+    if raw_reward is None:
+        return None
+
+    if "reward" in raw_reward and isinstance(raw_reward["reward"], dict):
+        raw_reward = raw_reward["reward"]
+
+    flattened: dict[str, object] = {}
+    for value in raw_reward.values():
+        if isinstance(value, dict):
+            flattened.update(value)
+    if flattened:
+        return flattened
+    return raw_reward
+
+
+def build_reward_config(raw_reward: dict | None) -> RewardConfig:
+    flattened_reward = flatten_reward_payload(raw_reward)
+    if flattened_reward is None:
+        return DEFAULT_REWARD_CONFIG
+
+    defaults = DEFAULT_REWARD_CONFIG.__dict__
+    payload = {key: flattened_reward.get(key, defaults[key]) for key in defaults}
+    return RewardConfig(**payload)
 
 
 def config_path(value: str) -> Path | None:
@@ -180,6 +212,10 @@ def main() -> None:
     evaluation = raw_config["evaluation"]
     artifacts = raw_config["artifacts"]
     checkpoint_policy = raw_config["checkpoint"]
+    reward_config_path = config_path(runtime.get("reward_config"))
+    if reward_config_path is None:
+        reward_config_path = (args.config.parent / "reward.toml").resolve()
+    reward = build_reward_config(load_reward_config(reward_config_path))
 
     config: dict[str, dict] = {
         "runtime": {
@@ -188,6 +224,7 @@ def main() -> None:
             "run_root": Path(runtime["run_root"]).resolve(),
             "run_name": args.run_name if args.run_name is not None else (runtime["run_name"] or None),
             "resume_from": args.resume_from.resolve() if args.resume_from is not None else config_path(runtime["resume_from"]),
+            "reward_config": reward_config_path,
         },
         "training": {
             "n_envs": int(args.n_envs if args.n_envs is not None else training["n_envs"]),
@@ -222,6 +259,7 @@ def main() -> None:
             "keep_last": int(checkpoint_policy["keep_last"]),
             "keep_milestone_every": int(checkpoint_policy["keep_milestone_every"]),
         },
+        "reward": reward.__dict__.copy(),
     }
 
     torch.manual_seed(config["runtime"]["seed"])
@@ -243,7 +281,11 @@ def main() -> None:
 
     opponent = RuleBasedBot()
     env = VectorEnv(
-        GomokuEnv(opponent=opponent, seed=config["runtime"]["seed"] + idx)
+        GomokuEnv(
+            opponent=opponent,
+            seed=config["runtime"]["seed"] + idx,
+            reward_config=reward,
+        )
         for idx in range(config["training"]["n_envs"])
     )
     model = ActorCriticNet()
