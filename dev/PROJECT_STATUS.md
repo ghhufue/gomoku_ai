@@ -2,265 +2,263 @@
 
 ## 项目目标
 
-本项目正在实现一个基于 PPO 的五子棋 AI 原型。当前主线目标不是追求最终最强棋力，而是先把下面这些能力做稳定：
+这个仓库当前的目标不是直接做出最强五子棋 AI，而是把基于 PPO 的训练闭环稳定下来，并为后续迭代保留可分析、可扩展的工程结构。
+
+当前主线目标：
 
 1. 环境逻辑正确
-2. 奖励机制可训练
-3. PPO 训练闭环可运行
-4. checkpoint / run / 评估链路完整
-5. 后续能平滑过渡到更高性能实现
+2. 奖励设计可训练
+3. PPO 训练流程可持续运行
+4. run / checkpoint / 评估 / 历史数据链路完整
+5. 模型结构、配置和工具链便于后续继续迭代
 
-当前阶段仍然是 Python-first 原型阶段，不是最终高性能版本。
+当前阶段仍然是 Python-first 原型，不是最终高性能版本。
 
 ## 当前已实现
 
 ### 环境与规则
 
 核心文件：
+
 - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
 - [gomoku_ai/rule_bot.py](/d:/code/gomoku_ai/gomoku_ai/rule_bot.py)
 
 已实现：
+
 - `15x15` 五子棋环境
-- 单智能体对战规则 Bot
+- 单智能体对战内置 Bot
 - 合法动作掩码
 - 非法落子直接判负
-- 胜负判断
-- 棋型识别：
-  - 五连
-  - 活四
-  - 冲四
-  - 活三
-  - 眠三
-  - 活二
-- 基于“落子前后 threat 变化”的奖励逻辑
+- 五连、活四、冲四、活三、眠三、活二等棋形识别
+- 基于落子前后 threat 变化的 reward 计算
+- `VectorEnv` 批量采样接口
 
 说明：
-- 规则逻辑已明显强于最初版本，但 reward 和 threat 计算仍然偏重，现阶段是性能瓶颈候选。
+
+- 训练环境目前仍是单进程串行 step，不是真正并行
+- 当前训练瓶颈主要还是环境与 reward 计算
 
 ### 模型与 PPO
 
 核心文件：
-- [gomoku_ai/model.py](/d:/code/gomoku_ai/gomoku_ai/model.py)
+
+- [gomoku_ai/model/network.py](/d:/code/gomoku_ai/gomoku_ai/model/network.py)
+- [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml)
 - [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py)
 
 已实现：
-- 轻量 ResNet Actor-Critic
-- 动作掩码策略分布
-- 同步 PPO 训练器
+
+- Residual Actor-Critic 网络
+- 策略头输出 `225` 维动作 logits
+- 价值头输出标量 `V(s)`
+- masked categorical 动作分布
+- 同步 PPO 更新
+- GAE 优势估计
 - TensorBoard 指标记录
-- `tqdm` 训练进度显示
-- rollout / optimize 耗时和吞吐输出
+- rollout / optimize / fps 统计
 
-近期重要变更：
-- 已去掉 value head 最后的 `Tanh`
-原因：
-  当前 reward 尺度到 `±1000`，critic 输出限制在 `[-1, 1]` 不合理，会导致异常巨大的 `value_loss`
+模型配置能力：
 
-### 训练与评估脚本
+- 模型代码已迁移到 `gomoku_ai/model/` 包
+- 预设模型放在 [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml)
+- 支持 `small / base / large / custom`
+- `custom` 时才读取 TOML 里的显式模型参数
+- checkpoint 可保存并恢复模型结构
+- 旧 checkpoint 无结构元数据时可从 `state_dict` 推断
+
+### 训练与评估
 
 核心文件：
+
 - [scripts/train.py](/d:/code/gomoku_ai/scripts/train.py)
 - [scripts/evaluate.py](/d:/code/gomoku_ai/scripts/evaluate.py)
 
 已实现：
-- 基于配置文件启动训练
-- 支持 CLI 局部覆盖
-- 聚合评估
-- 多 seed 评估
-- 训练中周期 checkpoint
+
+- 基于 TOML 的训练配置
+- 命令行覆盖关键超参
+- 启动前打印实际生效的训练策略摘要
+- 多 seed 聚合评估
+- 周期 checkpoint
 - `best_model`
 - `final_model`
 - `resume-from` 恢复训练
 
+训练历史记录：
+
+- 每个 run 下会写出 `history/`
+- `updates.log`：控制台摘要行
+- `updates.jsonl`：每次 update 的结构化训练数据
+- `updates.csv`：便于表格和脚本分析
+- `evals.jsonl`：每次评估结果
+- `training_strategy.json`：本次 run 的生效配置快照
+
 ### run 管理与工具
 
 核心文件：
+
 - [gomoku_ai/run_registry.py](/d:/code/gomoku_ai/gomoku_ai/run_registry.py)
 - [scripts/list_runs.py](/d:/code/gomoku_ai/scripts/list_runs.py)
 - [tools/cli.py](/d:/code/gomoku_ai/tools/cli.py)
 - [setup_env.ps1](/d:/code/gomoku_ai/setup_env.ps1)
 
 已实现：
-- 训练产物统一落在 `runs/<run_name>/`
+
+- 所有训练产物统一落到 `runs/<run_name>/`
 - 每个 run 自动生成：
   - `manifest.json`
   - `latest_eval.json`
   - `checkpoints/`
+  - `history/`
   - `tensorboard/`
   - `final_model.pt`
 - `runs/index.json` 统一维护 run 索引
-- `gmkt` 当前会话工具入口
-- 已有工具命令：
-  - `cleanup-latest-run`
+- `gmkt` 项目工具入口
+
+当前 CLI 命令包括：
+
+- `cleanup-latest-run`
+- `cleanup-artifacts`
+- `evaluate`
+- `test`
+- `reward-table`
 
 ### 配置外置
 
 核心文件：
+
 - [configs/train.toml](/d:/code/gomoku_ai/configs/train.toml)
-- [configs/train_exp01.toml](/d:/code/gomoku_ai/configs/train_exp01.toml)
+- [configs/custom/train_large.toml](/d:/code/gomoku_ai/configs/custom/train_large.toml)
+- [configs/reward.toml](/d:/code/gomoku_ai/configs/reward.toml)
 
 已实现：
-- 训练超参外置
-- checkpoint 保留策略外置
-- 输出路径策略外置
-- 配置注释已改成中文
+
+- PPO 训练超参外置
+- 评估策略外置
+- checkpoint 策略外置
+- run 产物目录策略外置
+- reward 参数外置
+- 模型 preset 与 custom 参数外置
 
 ### 测试
 
-核心文件：
-- [tests/test_env.py](/d:/code/gomoku_ai/tests/test_env.py)
+核心目录：
 
-当前测试已覆盖：
-- 五连识别
-- 活四识别
-- 冲四识别
-- 活三识别
-- 眠三识别
-- 双活三识别
-- 立即取胜点检测
-- threat summary
-- 关键防守奖励
-- 活二奖励边界
-- 非终局奖励上界
-- 非法落子
-- 终局行为
+- [tests](/d:/code/gomoku_ai/tests)
 
-当前状态：
-- `17 passed`
+当前已覆盖：
+
+- 环境与棋形识别
+- CLI evaluate 参数
+- evaluate 导出格式
+- replay record 兼容性
+- run layout
+- 模型配置推断与 checkpoint 兼容
+- cleanup-artifacts 行为
+
+说明：
+
+- 仓库内已有 `pytest` 测试文件
+- 但本地当前会话环境未必已经安装 `pytest` / `tensorboard`
 
 ## 当前训练现状
 
-已经开始尝试正式训练配置：
-- [configs/train_exp01.toml](/d:/code/gomoku_ai/configs/train_exp01.toml)
+目前模型可以稳定学会击败 `random` bot，但对 `rule` bot 仍然偏弱。
 
-目前明确观察到：
-- `optimize` 时间很短
-- `rollout` 时间极长
-- CPU 基本单核忙
-- GPU 利用率低
+当前观察：
 
-这说明当前训练瓶颈不是网络训练，而是环境采样。
+- 大模型配置已能正确生效，不再误回落到小模型
+- 训练日志和历史数据已经足够支持离线分析
+- 一些 run 会出现对 `random` 胜率高、对 `rule` 胜率长期为 `0` 的情况
 
-已知现象：
-- rollout 可能达到几十秒
-- optimize 可能只有不到 1 秒
+这说明当前主要问题不是“模型根本不会下棋”，而是：
 
-这基本确认当前主要瓶颈在：
-- `env.step()`
-- reward 计算
-- Rule Bot 决策
-- 当前 `VectorEnv` 只是串行批处理，不是真并行
+- 训练时长不够
+- 对手分布偏强
+- reward 虽然能学到基础落子，但还不足以稳定学出对抗 rule bot 的策略
 
-## 新增的 profiling 能力
-
-新增文件：
-- [scripts/profile_env.py](/d:/code/gomoku_ai/scripts/profile_env.py)
-
-用途：
-- benchmark 模式：
-  测环境步进整体耗时和 `steps_per_sec`
-- cProfile 模式：
-  打印 Python 调用层的累计耗时热点，并可保存 `.prof`
-
-推荐命令：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\profile_env.py --mode benchmark --steps 200
-```
-
-```powershell
-.\.venv\Scripts\python.exe scripts\profile_env.py --mode cprofile --steps 200 --top-k 30 --profile-out artifacts\env_profile.prof
-```
-
-当前还没有基于 profiling 结果做热点重构，下一位 AI 应优先跑这份脚本，拿到定量结论。
-
-## 当前最重要的未完成事项
+## 已知瓶颈
 
 ### 高优先级
 
-1. 环境性能 profiling
-目标：
-  确认真正最慢的是哪几个函数，而不是只凭体感判断
+1. 训练质量分析不足自动化
 
-2. 环境热点优化
-可能候选：
-  - `threat_summary(...)`
-  - `immediate_winning_actions(...)`
-  - `classify_move(...)`
-  - `evaluate_shape_reward(...)`
-  - `RuleBasedBot.select_action(...)`
+- 现在 history 已经落盘，但还缺少专门的分析脚本
+- 需要更系统地对 `win_rate / entropy / value_loss / reward components` 做回顾
 
-3. 训练吞吐优化
-当前 `n_envs` 是串行管理，不是真并行
-后续需要评估：
-  - 多进程环境
-  - Python 层减重
-  - C++ 下沉热点
+2. 训练对手过于单一
+
+- 当前主要仍围绕 rule bot
+- 建议后续增加 curriculum 或混合对手
+
+3. 环境吞吐仍偏低
+
+- rollout 时间显著高于 optimize 时间
+- 当前瓶颈主要仍在环境与规则逻辑，而不是网络反向传播
 
 ### 中优先级
 
-4. Rule Bot 难度分级
-当前 Bot 偏基础，只适合早期训练与基线评估
+4. 更丰富的评估基线
 
-5. 更丰富的评估基线
-目前主要评估对象仍是 Rule Bot
+- 当前主要评估对象是 `rule` 和 `random`
+- 还缺中间难度对手
 
-6. 更完整的训练监控
-后续可以补：
-  - value prediction 统计
-  - return 统计
-  - reward 分项统计
+5. 训练监控继续增强
+
+- 当前已经有 history
+- 后续可增加更多统计摘要和自动诊断
 
 ### 低优先级
 
-7. C++ 环境内核
-现在已经可以开始设计，但不建议直接整套重写
-更合理路线：
-  - 先 profiling
-  - 再选热点
-  - 再下沉 reward / pattern / state core
+6. C++ 下沉更多环境热路径
+
+- 现有 C++ backend 已存在
+- 但是否继续下沉，最好先基于 profiling 再做决定
 
 ## 当前建议的下一步
 
-如果新的 AI 接手，这一轮最推荐做的事情是：
+如果新的 AI 接手，这一轮最值得优先做的是：
 
-1. 跑环境 profiling
-2. 用结果确认热点
-3. 优先优化最重的 Python 逻辑
-4. 再决定是否开始 C++ 下沉
+1. 基于 `runs/<run>/history/` 做训练结果分析脚本
+2. 对比 `small / base / large / custom` 的实际学习效率
+3. 引入混合对手或 curriculum 训练
+4. 再决定 reward 调整还是环境性能优化优先
 
-不建议下一位 AI 一上来就直接：
+不建议直接跳到：
+
 - 全量 C++ 重写环境
-- 引入 MCTS
-- 引入 Alpha-Beta 到训练主链路
+- 直接引入 MCTS
+- 在训练主链路里加入复杂搜索
 
-## 给下一个 AI 的接手说明
+## 接手建议
 
 建议优先阅读：
 
-1. [dev/PROJECT_STATUS.md](/d:/code/gomoku_ai/dev/PROJECT_STATUS.md)
-2. [README.md](/d:/code/gomoku_ai/README.md)
-3. [configs/train.toml](/d:/code/gomoku_ai/configs/train.toml)
-4. [configs/train_exp01.toml](/d:/code/gomoku_ai/configs/train_exp01.toml)
-5. [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
-6. [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py)
-7. [tests/test_env.py](/d:/code/gomoku_ai/tests/test_env.py)
+1. [README.md](/d:/code/gomoku_ai/README.md)
+2. [dev/PROJECT_STATUS.md](/d:/code/gomoku_ai/dev/PROJECT_STATUS.md)
+3. [dev/COMMON_COMMANDS.md](/d:/code/gomoku_ai/dev/COMMON_COMMANDS.md)
+4. [configs/train.toml](/d:/code/gomoku_ai/configs/train.toml)
+5. [gomoku_ai/model/network.py](/d:/code/gomoku_ai/gomoku_ai/model/network.py)
+6. [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
+7. [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py)
 
 建议优先执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+python -m pytest -q
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\profile_env.py --mode benchmark --steps 200
+python scripts/train.py --config configs/train.toml
 ```
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\profile_env.py --mode cprofile --steps 200 --top-k 30
+python scripts/list_runs.py --limit 20
 ```
 
-只有在 profiling 结果明确后，再开始决定：
-- 先做 Python 热点优化
-- 还是开始 C++ 环境核心下沉
+只有在 run 历史和 profiling 结果都比较明确后，再决定下一步做：
+
+- reward 调整
+- 对手策略分层
+- 环境热路径优化
+- C++ 继续下沉

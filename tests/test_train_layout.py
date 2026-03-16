@@ -50,6 +50,7 @@ def test_resolve_run_layout_reuses_resume_run_dir_by_default() -> None:
 
     assert layout["run_dir"] == Path("runs/demo_run").resolve()
     assert layout["checkpoint_dir"] == Path("runs/demo_run/checkpoints").resolve()
+    assert layout["history_dir"] == Path("runs/demo_run/history").resolve()
 
 
 def test_resolve_run_layout_starts_new_branch_when_enabled() -> None:
@@ -73,6 +74,7 @@ def test_resolve_run_layout_starts_new_branch_when_enabled() -> None:
 
     assert layout["run_dir"] == Path("runs/branch_run").resolve()
     assert layout["checkpoint_dir"] == Path("runs/branch_run/checkpoints").resolve()
+    assert layout["history_dir"] == Path("runs/branch_run/history").resolve()
 
 
 def test_parse_bool_flag_supports_common_values() -> None:

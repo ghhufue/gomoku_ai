@@ -73,6 +73,69 @@ def cleanup_latest_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+        return
+    path.unlink(missing_ok=True)
+
+
+def clear_directory(path: Path, preserve_root: bool = True) -> int:
+    if not path.exists():
+        if preserve_root:
+            path.mkdir(parents=True, exist_ok=True)
+        return 0
+
+    removed = 0
+    for child in path.iterdir():
+        remove_path(child)
+        removed += 1
+    return removed
+
+
+def clear_outputs_preserving_child_dirs(outputs_root: Path) -> tuple[int, int]:
+    outputs_root.mkdir(parents=True, exist_ok=True)
+    cleared_directories = 0
+    removed_entries = 0
+
+    for child in outputs_root.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            removed_entries += clear_directory(child, preserve_root=True)
+            cleared_directories += 1
+            continue
+        remove_path(child)
+        removed_entries += 1
+    return cleared_directories, removed_entries
+
+
+def cleanup_workspace_artifacts(args: argparse.Namespace) -> int:
+    outputs_root = args.outputs_root.resolve()
+    log_root = args.log_root.resolve()
+    run_root = args.run_root.resolve()
+
+    if not args.yes:
+        print("refusing to delete without --yes")
+        print(f"outputs root: {outputs_root}")
+        print(f"log root: {log_root}")
+        print(f"run root: {run_root}")
+        return 2
+
+    outputs_dirs, outputs_removed = clear_outputs_preserving_child_dirs(outputs_root)
+    logs_removed = clear_directory(log_root, preserve_root=True)
+    runs_removed = clear_directory(run_root, preserve_root=True)
+
+    print(
+        "cleanup complete: outputs_dirs_preserved={outputs_dirs} outputs_entries_removed={outputs_removed} "
+        "log_entries_removed={logs_removed} run_entries_removed={runs_removed}".format(
+            outputs_dirs=outputs_dirs,
+            outputs_removed=outputs_removed,
+            logs_removed=logs_removed,
+            runs_removed=runs_removed,
+        )
+    )
+    return 0
+
+
 def run_test_command(args: argparse.Namespace) -> int:
     from tests.test_env import main as test_env_main
 
@@ -121,6 +184,20 @@ def run_evaluate_command(args: argparse.Namespace) -> int:
 
     evaluate_main(argv)
     return 0
+
+
+def run_replay_command(args: argparse.Namespace) -> int:
+    from tools.replay_record import main as replay_main
+
+    argv: list[str] = []
+    if args.record is not None:
+        argv.extend(["--record", str(args.record)])
+    if args.name is not None:
+        argv.extend(["--name", args.name])
+    argv.extend(["--game", str(args.game)])
+    if args.list:
+        argv.append("--list")
+    return int(replay_main(argv))
 
 
 REWARD_FIELD_LABELS = {
@@ -239,6 +316,15 @@ def make_parser() -> argparse.ArgumentParser:
     cleanup_parser.add_argument("--run-root", type=Path, default=Path("runs"), help="Run root directory.")
     cleanup_parser.add_argument("--yes", action="store_true", help="Actually perform the deletion.")
 
+    cleanup_artifacts_parser = subparsers.add_parser(
+        "cleanup-artifacts",
+        help="Clear outputs/, logs/, and runs/ artifacts while preserving the root directories.",
+    )
+    cleanup_artifacts_parser.add_argument("--outputs-root", type=Path, default=Path("outputs"), help="Outputs root directory.")
+    cleanup_artifacts_parser.add_argument("--log-root", type=Path, default=Path("logs"), help="Logs root directory.")
+    cleanup_artifacts_parser.add_argument("--run-root", type=Path, default=Path("runs"), help="Run root directory.")
+    cleanup_artifacts_parser.add_argument("--yes", action="store_true", help="Actually perform the deletion.")
+
     test_parser = subparsers.add_parser(
         "test",
         help="Run env tests, or print a single reward case with board/reward breakdown.",
@@ -299,6 +385,15 @@ def make_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--export-visual", action="store_true", default=True, help="Export visual JSON.")
     evaluate_parser.add_argument("--no-export-visual", action="store_false", dest="export_visual", help="Disable visual JSON export.")
 
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Replay a record and inspect per-move reward.",
+    )
+    replay_parser.add_argument("--record", type=Path, default=None, help="Path to record JSON.")
+    replay_parser.add_argument("--name", type=str, default=None, help="Built-in record name without .json.")
+    replay_parser.add_argument("--game", type=int, default=1, help="Game index for multi-game records.")
+    replay_parser.add_argument("--list", action="store_true", help="List available built-in records.")
+
     return parser
 
 
@@ -317,6 +412,9 @@ def main() -> int:
     if args.command == "cleanup-latest-run":
         return cleanup_latest_run(args)
 
+    if args.command == "cleanup-artifacts":
+        return cleanup_workspace_artifacts(args)
+
     if args.command == "test":
         return run_test_command(args)
 
@@ -325,6 +423,9 @@ def main() -> int:
 
     if args.command == "evaluate":
         return run_evaluate_command(args)
+
+    if args.command == "replay":
+        return run_replay_command(args)
 
     parser.print_help()
     return 1

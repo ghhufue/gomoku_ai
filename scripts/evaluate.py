@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gomoku_ai.env import BLACK, BOARD_SIZE, GomokuEnv, WHITE, action_to_coord
-from gomoku_ai.model import ActorCriticNet
+from gomoku_ai.model import ActorCriticNet, model_config_from_checkpoint_payload
 from gomoku_ai.rule_bot import RuleBasedBot
 
 
@@ -394,7 +394,8 @@ def export_match_outputs(
 
 def load_model_from_checkpoint(checkpoint_path: Path, device: str) -> ActorCriticNet:
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    model = ActorCriticNet().to(device)
+    model_config = model_config_from_checkpoint_payload(checkpoint)
+    model = ActorCriticNet(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     return model

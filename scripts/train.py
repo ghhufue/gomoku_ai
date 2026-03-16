@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +16,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gomoku_ai.env import DEFAULT_REWARD_CONFIG, GomokuEnv, RewardConfig, VectorEnv
-from gomoku_ai.model import ActorCriticNet
+from gomoku_ai.model import (
+    MODEL_PRESETS,
+    ActorCriticNet,
+    ModelConfig,
+    model_config_from_checkpoint_payload,
+    model_preset_config,
+)
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 from gomoku_ai.run_registry import update_registry
 from gomoku_ai.rule_bot import RuleBasedBot
@@ -36,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--model-preset", type=str, choices=MODEL_PRESETS, default=None)
+    parser.add_argument("--model-channels", type=int, default=None)
+    parser.add_argument("--model-blocks", type=int, default=None)
+    parser.add_argument("--policy-channels", type=int, default=None)
+    parser.add_argument("--value-channels", type=int, default=None)
+    parser.add_argument("--value-hidden-dim", type=int, default=None)
     parser.add_argument("--save-every", type=int, default=None)
     parser.add_argument("--eval-every", type=int, default=None)
     parser.add_argument("--eval-games", type=int, default=None)
@@ -63,6 +76,40 @@ def parse_bool_flag(value: str | bool | None, default: bool = False) -> bool:
     raise ValueError(f"invalid boolean value: {value}")
 
 
+def build_model_config(raw_model: dict | None, args: argparse.Namespace) -> ModelConfig:
+    raw_model = raw_model or {}
+    preset_name = str(args.model_preset or raw_model.get("preset", "base")).lower()
+    if preset_name == "custom":
+        return ModelConfig(
+            channels=int(args.model_channels if args.model_channels is not None else raw_model.get("channels", ModelConfig().channels)),
+            blocks=int(args.model_blocks if args.model_blocks is not None else raw_model.get("blocks", ModelConfig().blocks)),
+            policy_channels=int(
+                args.policy_channels
+                if args.policy_channels is not None
+                else raw_model.get("policy_channels", ModelConfig().policy_channels)
+            ),
+            value_channels=int(
+                args.value_channels
+                if args.value_channels is not None
+                else raw_model.get("value_channels", ModelConfig().value_channels)
+            ),
+            value_hidden_dim=int(
+                args.value_hidden_dim
+                if args.value_hidden_dim is not None
+                else raw_model.get("value_hidden_dim", ModelConfig().value_hidden_dim)
+            ),
+        )
+
+    base = model_preset_config(preset_name)
+    return ModelConfig(
+        channels=int(args.model_channels if args.model_channels is not None else base.channels),
+        blocks=int(args.model_blocks if args.model_blocks is not None else base.blocks),
+        policy_channels=int(args.policy_channels if args.policy_channels is not None else base.policy_channels),
+        value_channels=int(args.value_channels if args.value_channels is not None else base.value_channels),
+        value_hidden_dim=int(args.value_hidden_dim if args.value_hidden_dim is not None else base.value_hidden_dim),
+    )
+
+
 def save_checkpoint(
     model: ActorCriticNet,
     optimizer: torch.optim.Optimizer,
@@ -71,6 +118,7 @@ def save_checkpoint(
     seed: int,
     history_tail: list[dict[str, float]],
     update: int,
+    model_config: ModelConfig,
     extra: dict | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,23 +130,13 @@ def save_checkpoint(
         "seed": seed,
         "update": update,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "model_config": model_config.to_dict(),
     }
     if extra is not None:
-        payload["extra"] = extra
+        payload["extra"] = {"model_config": model_config.to_dict(), **extra}
+    else:
+        payload["extra"] = {"model_config": model_config.to_dict()}
     torch.save(payload, path)
-
-
-def load_resume_state(
-    resume_path: Path,
-    model: ActorCriticNet,
-    trainer: PPOTrainer,
-) -> dict:
-    payload = torch.load(resume_path, map_location=trainer.config.device)
-    model.load_state_dict(payload["model_state_dict"])
-    optimizer_state = payload.get("optimizer_state_dict")
-    if optimizer_state is not None:
-        trainer.optimizer.load_state_dict(optimizer_state)
-    return payload
 
 
 def load_config(config_path: Path) -> dict:
@@ -169,6 +207,7 @@ def resolve_run_layout(config: dict) -> dict[str, Path]:
 
     checkpoint_dir = run_dir / artifacts["checkpoint_dir"]
     log_dir = run_dir / artifacts["tensorboard_dir"]
+    history_dir = run_dir / str(artifacts.get("history_dir", "history"))
     save_path = run_dir / artifacts["final_model_name"]
     manifest_path = run_dir / artifacts["manifest_name"]
     latest_eval_path = run_dir / artifacts["latest_eval_name"]
@@ -178,6 +217,7 @@ def resolve_run_layout(config: dict) -> dict[str, Path]:
         "run_dir": run_dir,
         "checkpoint_dir": checkpoint_dir,
         "log_dir": log_dir,
+        "history_dir": history_dir,
         "save_path": save_path,
         "manifest_path": manifest_path,
         "latest_eval_path": latest_eval_path,
@@ -231,6 +271,112 @@ def prune_checkpoints(checkpoint_dir: Path, keep_last: int, keep_milestone_every
     return removed
 
 
+def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) -> None:
+    runtime = config["runtime"]
+    training = config["training"]
+    model = config["model"]
+    evaluation = config["evaluation"]
+    checkpoint = config["checkpoint"]
+    artifacts = config["artifacts"]
+
+    print("=== training strategy ===")
+    print(
+        "runtime: device={device} seed={seed} run_dir={run_dir}".format(
+            device=runtime["device"],
+            seed=runtime["seed"],
+            run_dir=layout["run_dir"],
+        )
+    )
+    print(
+        "model: preset={preset} channels={channels} blocks={blocks} policy_channels={policy_channels} "
+        "value_channels={value_channels} value_hidden_dim={value_hidden_dim}".format(**model)
+    )
+    print(
+        "ppo: n_envs={n_envs} n_steps={n_steps} updates={updates} batch_size={batch_size} epochs={epochs} "
+        "lr={lr} show_progress={show_progress}".format(**training)
+    )
+    print(
+        "evaluation: eval_every={eval_every} eval_games={eval_games} eval_seeds={eval_seeds}".format(**evaluation)
+    )
+    print(
+        "checkpoint: save_every={save_every} keep_best_model={keep_best_model} keep_final_model={keep_final_model} "
+        "keep_last={keep_last} keep_milestone_every={keep_milestone_every}".format(**checkpoint)
+    )
+    print(
+        "paths: checkpoint_dir={checkpoint_dir} tensorboard_dir={tensorboard_dir} final_model={final_model_name} "
+        "latest_eval={latest_eval_name} history_dir={history_dir}".format(**artifacts)
+    )
+    print(
+        "resume: resume_from={resume_from} start_new_branch={start_new_branch} reward_config={reward_config}".format(
+            resume_from=runtime["resume_from"],
+            start_new_branch=runtime["start_new_branch"],
+            reward_config=runtime["reward_config"],
+        )
+    )
+    print("=========================")
+
+
+def format_update_message(stats: dict[str, float]) -> str:
+    return (
+        "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.2f} "
+        "wins={wins} losses={losses} draws={draws} value_loss={value_loss:.4f} entropy={entropy:.4f} "
+        "rollout={rollout_time_s:.1f}s optimize={optimize_time_s:.1f}s fps={samples_per_sec:.1f}"
+    ).format(**stats)
+
+
+def append_jsonl(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(to_jsonable(payload), ensure_ascii=False) + "\n")
+
+
+def append_csv_row(path: Path, row: dict[str, object], fieldnames: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = path.exists()
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({key: row.get(key) for key in fieldnames})
+
+
+def write_history_strategy(path: Path, config: dict[str, dict], layout: dict[str, Path]) -> None:
+    payload = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "config": config,
+        "layout": {key: str(value) for key, value in layout.items()},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(to_jsonable(payload), indent=2), encoding="utf-8")
+
+
+UPDATE_CSV_FIELDS = [
+    "update",
+    "episodes",
+    "wins",
+    "losses",
+    "draws",
+    "ep_rew_mean",
+    "policy_loss",
+    "value_loss",
+    "entropy",
+    "approx_kl",
+    "clip_fraction",
+    "explained_variance",
+    "rollout_time_s",
+    "optimize_time_s",
+    "total_time_s",
+    "samples_per_sec",
+    "offense_bonus",
+    "defense_bonus",
+    "block_winning_bonus",
+    "block_four_bonus",
+    "unresolved_winning_penalty",
+    "unresolved_four_penalty",
+    "unresolved_live_three_penalty",
+]
+
+
 def main() -> None:
     args = build_parser().parse_args()
     raw_config = load_config(args.config)
@@ -239,6 +385,8 @@ def main() -> None:
     evaluation = raw_config["evaluation"]
     artifacts = raw_config["artifacts"]
     checkpoint_policy = raw_config["checkpoint"]
+    model_preset = str(args.model_preset or raw_config.get("model", {}).get("preset", "base")).lower()
+    model_config = build_model_config(raw_config.get("model"), args)
     reward_config_path = config_path(runtime.get("reward_config"))
     if reward_config_path is None:
         reward_config_path = (args.config.parent / "reward.toml").resolve()
@@ -267,6 +415,7 @@ def main() -> None:
                 else bool(training.get("show_progress", True))
             ),
         },
+        "model": {"preset": model_preset, **model_config.to_dict()},
         "evaluation": {
             "eval_every": int(args.eval_every if args.eval_every is not None else evaluation["eval_every"]),
             "eval_games": int(args.eval_games if args.eval_games is not None else evaluation["eval_games"]),
@@ -275,6 +424,7 @@ def main() -> None:
         "artifacts": {
             "tensorboard_dir": str(artifacts["tensorboard_dir"]),
             "checkpoint_dir": str(artifacts["checkpoint_dir"]),
+            "history_dir": str(artifacts.get("history_dir", "history")),
             "final_model_name": str(artifacts["final_model_name"]),
             "latest_eval_name": str(artifacts["latest_eval_name"]),
             "manifest_name": str(artifacts["manifest_name"]),
@@ -294,18 +444,7 @@ def main() -> None:
     device = resolve_device(config["runtime"]["device"])
     config["runtime"]["device"] = device
     layout = resolve_run_layout(config)
-    print(f"using device: {device}")
-    print(f"run directory: {layout['run_dir']}")
-    print(
-        "training config: n_envs={n_envs} n_steps={n_steps} updates={updates} batch_size={batch_size} epochs={epochs} eval_every={eval_every}".format(
-            n_envs=config["training"]["n_envs"],
-            n_steps=config["training"]["n_steps"],
-            updates=config["training"]["updates"],
-            batch_size=config["training"]["batch_size"],
-            epochs=config["training"]["epochs"],
-            eval_every=config["evaluation"]["eval_every"],
-        )
-    )
+    print_training_strategy(config, layout)
 
     opponent = RuleBasedBot()
     env = VectorEnv(
@@ -316,7 +455,7 @@ def main() -> None:
         )
         for idx in range(config["training"]["n_envs"])
     )
-    model = ActorCriticNet()
+    model = ActorCriticNet(model_config)
     ppo_config = PPOConfig(
         n_envs=config["training"]["n_envs"],
         n_steps=config["training"]["n_steps"],
@@ -330,13 +469,20 @@ def main() -> None:
     layout["run_dir"].mkdir(parents=True, exist_ok=True)
     layout["log_dir"].mkdir(parents=True, exist_ok=True)
     layout["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
+    layout["history_dir"].mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(log_dir=str(layout["log_dir"]))
     trainer = PPOTrainer(model=model, env=env, config=ppo_config, writer=writer)
     best_eval: dict[str, float] | None = None
     history_tail: list[dict[str, float]] = []
     best_model_path = layout["checkpoint_dir"] / config["checkpoint"]["best_model_name"]
     latest_metrics_path = layout["latest_eval_path"]
+    updates_jsonl_path = layout["history_dir"] / "updates.jsonl"
+    updates_csv_path = layout["history_dir"] / "updates.csv"
+    updates_log_path = layout["history_dir"] / "updates.log"
+    evals_jsonl_path = layout["history_dir"] / "evals.jsonl"
+    strategy_path = layout["history_dir"] / "training_strategy.json"
     start_update = 0
+    write_history_strategy(strategy_path, config, layout)
 
     manifest: dict[str, object] = {
         "run_dir": str(layout["run_dir"]),
@@ -347,6 +493,7 @@ def main() -> None:
             "final_model": str(layout["save_path"]),
             "checkpoint_dir": str(layout["checkpoint_dir"]),
             "tensorboard_dir": str(layout["log_dir"]),
+            "history_dir": str(layout["history_dir"]),
             "best_model": str(best_model_path),
             "latest_eval": str(latest_metrics_path),
         },
@@ -362,12 +509,22 @@ def main() -> None:
     persist_run_metadata(layout, manifest)
 
     if config["runtime"]["resume_from"] is not None:
-        resume_payload = load_resume_state(config["runtime"]["resume_from"], model=model, trainer=trainer)
+        resume_payload = torch.load(config["runtime"]["resume_from"], map_location=trainer.config.device)
+        resume_model_config = model_config_from_checkpoint_payload(resume_payload)
+        if resume_model_config != model.config:
+            model = ActorCriticNet(resume_model_config).to(device)
+            trainer = PPOTrainer(model=model, env=env, config=ppo_config, writer=writer)
+        trainer.model.load_state_dict(resume_payload["model_state_dict"])
+        optimizer_state = resume_payload.get("optimizer_state_dict")
+        if optimizer_state is not None:
+            trainer.optimizer.load_state_dict(optimizer_state)
         start_update = int(resume_payload.get("update", 0))
         history_tail = list(resume_payload.get("history_tail", []))
         resume_extra = resume_payload.get("extra", {})
         best_eval = resume_extra.get("best_eval") or resume_extra.get("eval_metrics")
         resumed_seed = resume_payload.get("seed")
+        config["model"] = {"preset": "checkpoint", **resume_model_config.to_dict()}
+        manifest["config"]["model"] = {"preset": "checkpoint", **resume_model_config.to_dict()}
         print(f"resumed from {config['runtime']['resume_from']} at update {start_update}")
         if resumed_seed is not None and resumed_seed != config["runtime"]["seed"]:
             print(f"resume checkpoint seed={resumed_seed}, current run seed={config['runtime']['seed']}")
@@ -380,6 +537,20 @@ def main() -> None:
         history_tail.append(stats)
         del history_tail[:-10]
         manifest["last_update"] = update
+        update_message = format_update_message(stats)
+        append_jsonl(
+            updates_jsonl_path,
+            {
+                "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                "message": update_message,
+                "stats": stats,
+                "model": config["model"],
+                "training": config["training"],
+            },
+        )
+        append_csv_row(updates_csv_path, stats, UPDATE_CSV_FIELDS)
+        with updates_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(update_message + "\n")
 
         if config["checkpoint"]["save_every"] > 0 and update % config["checkpoint"]["save_every"] == 0:
             checkpoint_path = layout["checkpoint_dir"] / f"checkpoint_update_{update:04d}.pt"
@@ -391,6 +562,7 @@ def main() -> None:
                 seed=config["runtime"]["seed"],
                 history_tail=history_tail,
                 update=update,
+                model_config=current_model.config,
                 extra={"train_stats": stats},
             )
             manifest["latest_checkpoint"] = str(checkpoint_path)
@@ -427,6 +599,14 @@ def main() -> None:
 
             latest_metrics_path.write_text(json.dumps(eval_metrics, indent=2), encoding="utf-8")
             manifest["latest_eval"] = eval_metrics
+            append_jsonl(
+                evals_jsonl_path,
+                {
+                    "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                    "metrics": eval_metrics,
+                    "update_stats": stats,
+                },
+            )
             print(
                 "eval update={update} win_rate={win_rate:.3f} std={win_rate_std:.3f} wins={wins:.0f} "
                 "losses={losses:.0f} draws={draws:.0f} avg_steps={avg_steps:.2f}".format(**eval_metrics)
@@ -448,6 +628,7 @@ def main() -> None:
                     seed=config["runtime"]["seed"],
                     history_tail=history_tail,
                     update=update,
+                    model_config=current_model.config,
                     extra={"eval_metrics": eval_metrics, "train_stats": stats},
                 )
                 manifest["best_eval"] = best_eval
@@ -467,6 +648,7 @@ def main() -> None:
             seed=config["runtime"]["seed"],
             history_tail=history[-10:],
             update=start_update + config["training"]["updates"],
+            model_config=model.config,
             extra={"best_eval": best_eval},
         )
     manifest["status"] = "completed"

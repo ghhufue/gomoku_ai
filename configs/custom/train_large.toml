@@ -30,20 +30,20 @@ reward_config = "configs/reward.toml"
 n_envs = 8
 
 # 每个环境在一次 PPO 更新前收集的步数。
-n_steps = 128
+n_steps = 256
 
 # 本次执行要跑多少次 PPO update。
 # 如果是恢复训练，这里表示“额外再跑多少次”，不是总 update 数。
-updates = 2000
+updates = 400
 
 # PPO 小批量大小。
-batch_size = 256
+batch_size = 1024
 
 # 每次 PPO update 内部的优化轮数。
 epochs = 4
 
 # Adam 学习率。
-lr = 0.0001
+lr = 1e-4
 
 # 是否显示训练进度条和中间输出。
 show_progress = true
@@ -85,9 +85,6 @@ tensorboard_dir = "tensorboard"
 
 # run 目录下用于保存周期 checkpoint 的相对目录名。
 checkpoint_dir = "checkpoints"
-
-# run 目录下用于保存中间训练历史与分析数据的相对目录名。
-history_dir = "history"
 
 # 训练结束时最终模型文件名。
 final_model_name = "final_model.pt"

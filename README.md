@@ -6,7 +6,7 @@ This repository contains the first runnable prototype for a Gomoku reinforcement
 
 - `gomoku_ai/env.py`: single-agent environment against a rule-based bot
 - `gomoku_ai/rule_bot.py`: baseline opponent
-- `gomoku_ai/model.py`: lightweight residual actor-critic network
+- `gomoku_ai/model/network.py`: lightweight residual actor-critic network
 - `gomoku_ai/ppo.py`: synchronous PPO trainer
 - `scripts/train.py`: local training entrypoint
 
@@ -14,6 +14,20 @@ This repository contains the first runnable prototype for a Gomoku reinforcement
 
 ```bash
 python scripts/train.py --config configs/train.toml
+```
+
+Model presets:
+
+```bash
+python scripts/train.py --config configs/train.toml --model-preset small
+python scripts/train.py --config configs/train.toml --model-preset base
+python scripts/train.py --config configs/train.toml --model-preset large
+```
+
+Custom model from explicit config or CLI parameters:
+
+```bash
+python scripts/train.py --config configs/train.toml --model-preset custom --model-channels 160 --model-blocks 7 --policy-channels 5 --value-channels 3 --value-hidden-dim 320
 ```
 
 By default, each training run writes all outputs into its own directory under `runs/`, for example:
@@ -24,6 +38,7 @@ runs/20260314_213500/
   final_model.pt
   latest_eval.json
   checkpoints/
+  history/
   tensorboard/
 runs/index.json
 ```
@@ -73,12 +88,19 @@ Cleanup the latest run directory:
 python tools/cli.py cleanup-latest-run --yes
 ```
 
+Clear generated artifacts under `outputs/`, `logs/`, and `runs/`:
+
+```bash
+python tools/cli.py cleanup-artifacts --yes
+```
+
 Project-local `tools` entrypoint:
 
 ```powershell
 .\setup_env.ps1
 gmkt help
 gmkt cleanup-latest-run --yes
+gmkt cleanup-artifacts --yes
 ```
 
 ## Notes

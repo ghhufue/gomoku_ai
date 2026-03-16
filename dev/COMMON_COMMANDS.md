@@ -24,6 +24,35 @@
 python scripts/train.py --config configs/train.toml
 ```
 
+说明：
+
+- 训练开始前会先输出一次“实际生效”的训练策略摘要
+- run 目录下会额外生成 `history/`，包含 `updates.log`、`updates.jsonl`、`updates.csv`、`evals.jsonl`、`training_strategy.json`
+
+使用小模型预设：
+
+```powershell
+python scripts/train.py --config configs/train.toml --model-preset small
+```
+
+使用基础模型预设：
+
+```powershell
+python scripts/train.py --config configs/train.toml --model-preset base
+```
+
+使用大模型预设：
+
+```powershell
+python scripts/train.py --config configs/train.toml --model-preset large
+```
+
+使用 custom 模型参数：
+
+```powershell
+python scripts/train.py --config configs/train.toml --model-preset custom --model-channels 160 --model-blocks 7 --policy-channels 5 --value-channels 3 --value-hidden-dim 320
+```
+
 指定设备：
 
 ```powershell
@@ -60,6 +89,7 @@ python scripts/train.py --config configs/train.toml --resume-from runs\<run_name
 
 - `updates` 表示在当前恢复点基础上再训练多少个 update
 - 恢复训练会继续写回原来的 `runs\<run_name>\` 目录
+- 恢复训练后的中间统计会继续追加到该 run 的 `history/`
 
 ## 评估
 
@@ -133,10 +163,18 @@ python scripts/play_match.py --checkpoint runs\<run_name>\final_model.pt --games
 python tools/replay_record.py --record outputs\evaluation\<export_dir>\match_record.json --game 1
 ```
 
+```powershell
+gmkt replay --record outputs\evaluation\<export_dir>\match_record.json --game 1
+```
+
 回放第 50 局：
 
 ```powershell
 python tools/replay_record.py --record outputs\evaluation\<export_dir>\match_record.json --game 50
+```
+
+```powershell
+gmkt replay --record outputs\evaluation\<export_dir>\match_record.json --game 50
 ```
 
 回放内置样例：
@@ -145,10 +183,18 @@ python tools/replay_record.py --record outputs\evaluation\<export_dir>\match_rec
 python tools/replay_record.py --name block_live_three
 ```
 
+```powershell
+gmkt replay --name block_live_three
+```
+
 列出内置样例：
 
 ```powershell
 python tools/replay_record.py --list
+```
+
+```powershell
+gmkt replay --list
 ```
 
 ## 棋形浏览
@@ -223,6 +269,12 @@ outputs/visual/reward_table.md
 
 ```powershell
 gmkt cleanup-latest-run --yes
+```
+
+清理 `outputs/`、`logs/`、`runs/` 下的产物，同时保留这些根目录和 `outputs/` 下的一级子目录：
+
+```powershell
+gmkt cleanup-artifacts --yes
 ```
 
 查看可用命令帮助：
