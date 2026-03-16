@@ -21,7 +21,7 @@
 核心文件：
 
 - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
-- [gomoku_ai/rule_bot.py](/d:/code/gomoku_ai/gomoku_ai/rule_bot.py)
+- [bots/reward_driven_bot.py](/d:/code/gomoku_ai/bots/reward_driven_bot.py)
 
 已实现：
 

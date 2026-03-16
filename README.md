@@ -9,7 +9,8 @@
 ## 主要组件
 
 - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py): 五子棋环境、棋形识别、reward 计算、`VectorEnv`
-- [gomoku_ai/rule_bot.py](/d:/code/gomoku_ai/gomoku_ai/rule_bot.py): 规则对手
+- [bots/reward_driven_bot.py](/d:/code/gomoku_ai/bots/reward_driven_bot.py): reward 驱动规则对手
+- [configs/bots.toml](/d:/code/gomoku_ai/configs/bots.toml): bot 注册表、难度映射与能力说明
 - [gomoku_ai/model/network.py](/d:/code/gomoku_ai/gomoku_ai/model/network.py): Actor-Critic 网络与模型配置恢复
 - [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml): `small / base / large` 模型预设
 - [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py): PPO 与 GAE 实现

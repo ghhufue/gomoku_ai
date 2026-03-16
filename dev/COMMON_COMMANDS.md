@@ -249,6 +249,61 @@ gmkt test --list-cases
 gmkt test --case-id 16
 ```
 
+## Performance Profiling
+
+Profile PPO training rollout/update time for `small/base/large` and write reports to `outputs/profile/`:
+```powershell
+python scripts/profile_env.py
+```
+
+Run a smaller, faster profiling pass:
+```powershell
+python scripts/profile_env.py --presets small --updates 1 --n-envs 1 --n-steps 4 --epochs 1 --batch-size 4 --device cpu
+```
+
+Profile only selected model presets:
+```powershell
+python scripts/profile_env.py --presets small,base --updates 2
+```
+
+Override the opponent bot used during profiling:
+```powershell
+python scripts/profile_env.py --bot classic_rule
+python scripts/profile_env.py --bot-difficulty medium
+```
+
+Override the report output directory:
+```powershell
+python scripts/profile_env.py --output-dir outputs/profile_test
+```
+
+Environment throughput benchmark only:
+```powershell
+python scripts/profile_env.py --mode benchmark --steps 200
+```
+
+Python call-level profile for environment stepping:
+```powershell
+python scripts/profile_env.py --mode cprofile --steps 200 --top-k 30
+```
+
+Save a raw `.prof` file for later inspection:
+```powershell
+python scripts/profile_env.py --mode cprofile --steps 200 --profile-out outputs/profile/env_step.prof
+```
+
+Profiling report outputs:
+- `outputs/profile/<timestamp>_training_profile.json`
+- `outputs/profile/<timestamp>_training_profile.md`
+- `outputs/profile/latest_training_profile.json`
+- `outputs/profile/latest_training_profile.md`
+
+The training-profile report includes:
+- rollout sampling time
+- PPO parameter update time
+- model inference related timings
+- reward/threat related function call counts and timings
+
 ## Reward 配置表
 
 把 reward TOML 转成 Markdown 表格：

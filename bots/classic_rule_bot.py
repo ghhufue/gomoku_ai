@@ -4,6 +4,8 @@ import math
 
 import numpy as np
 
+from bots.base import Bot
+from bots.reward_driven_bot import neighboring_actions_with_radius
 from gomoku_ai.env import (
     BOARD_SIZE,
     EMPTY,
@@ -15,31 +17,15 @@ from gomoku_ai.env import (
     SLEEP_THREE_IDX,
     action_to_coord,
     classify_move_counts,
-    coord_to_action,
 )
 
 
-def neighboring_actions(board: np.ndarray) -> list[int]:
-    stones = np.argwhere(board != EMPTY)
-    if len(stones) == 0:
-        center = BOARD_SIZE // 2
-        return [coord_to_action(center, center)]
+class ClassicRuleBot(Bot):
+    def __init__(self, candidate_radius: int = 2):
+        self.candidate_radius = max(1, int(candidate_radius))
 
-    candidates: set[int] = set()
-    for row, col in stones:
-        for dr in range(-2, 3):
-            for dc in range(-2, 3):
-                nr = int(row) + dr
-                nc = int(col) + dc
-                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == EMPTY:
-                    candidates.add(coord_to_action(nr, nc))
-
-    return list(candidates)
-
-
-class RuleBasedBot:
-    def select_action(self, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
-        candidates = neighboring_actions(board)
+    def next_action(self, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
+        candidates = neighboring_actions_with_radius(board, radius=self.candidate_radius)
         if not candidates:
             empties = np.flatnonzero(board.reshape(-1) == EMPTY)
             return int(rng.choice(empties))

@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import numpy as np
+
+from bots.base import Bot
+from gomoku_ai.env import (
+    BOARD_SIZE,
+    DEFAULT_REWARD_CONFIG,
+    EMPTY,
+    RewardConfig,
+    action_to_coord,
+    coord_to_action,
+    evaluate_shape_reward,
+)
+
+
+def neighboring_actions(board: np.ndarray) -> list[int]:
+    return neighboring_actions_with_radius(board, radius=2)
+
+
+def neighboring_actions_with_radius(board: np.ndarray, radius: int) -> list[int]:
+    stones = np.argwhere(board != EMPTY)
+    if len(stones) == 0:
+        center = BOARD_SIZE // 2
+        return [coord_to_action(center, center)]
+
+    candidates: set[int] = set()
+    for row, col in stones:
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                nr = int(row) + dr
+                nc = int(col) + dc
+                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr, nc] == EMPTY:
+                    candidates.add(coord_to_action(nr, nc))
+
+    return list(candidates)
+
+
+class RewardDrivenBot(Bot):
+    def __init__(
+        self,
+        reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
+        candidate_radius: int = 2,
+        top_k: int = 1,
+    ):
+        self.reward_config = reward_config
+        self.candidate_radius = max(1, int(candidate_radius))
+        self.top_k = max(1, int(top_k))
+
+    def next_action(self, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
+        candidates = neighboring_actions_with_radius(board, radius=self.candidate_radius)
+        if not candidates:
+            empties = np.flatnonzero(board.reshape(-1) == EMPTY)
+            return int(rng.choice(empties))
+
+        scored_actions: list[tuple[float, int]] = []
+
+        for action in candidates:
+            row, col = action_to_coord(action)
+            board_after = board.copy()
+            board_after[row, col] = player
+            reward, _ = evaluate_shape_reward(
+                board,
+                board_after,
+                row,
+                col,
+                player,
+                reward_config=self.reward_config,
+            )
+            scored_actions.append((float(reward), int(action)))
+
+        scored_actions.sort(key=lambda item: item[0], reverse=True)
+        top_actions = scored_actions[: min(self.top_k, len(scored_actions))]
+        if len(top_actions) == 1:
+            return top_actions[0][1]
+
+        rewards = np.asarray([item[0] for item in top_actions], dtype=np.float64)
+        rewards = rewards - rewards.max()
+        weights = np.exp(rewards)
+        probabilities = weights / weights.sum()
+        selected = int(rng.choice(len(top_actions), p=probabilities))
+        return top_actions[selected][1]

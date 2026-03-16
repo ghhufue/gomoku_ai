@@ -683,7 +683,7 @@ class GomokuEnv:
         self.agent_player = BLACK if self.rng.random() < 0.5 else WHITE
 
         if self.agent_player == WHITE:
-            opening = self.opponent.select_action(self.board.copy(), BLACK, self.rng)
+            opening = call_bot_action(self.opponent, self.board.copy(), BLACK, self.rng)
             row, col = action_to_coord(opening)
             self.board[row, col] = BLACK
 
@@ -741,7 +741,7 @@ class GomokuEnv:
             info["agent_result"] = "draw"
             return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
-        opponent_action = self.opponent.select_action(self.board.copy(), -self.agent_player, self.rng)
+        opponent_action = call_bot_action(self.opponent, self.board.copy(), -self.agent_player, self.rng)
         opp_row, opp_col = action_to_coord(opponent_action)
         if self.board[opp_row, opp_col] != EMPTY:
             empties = empty_actions(self.board)
@@ -772,6 +772,14 @@ class GomokuEnv:
             return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
         return StepResult(self.observation(), self.action_mask(), reward, False, info)
+
+
+def call_bot_action(opponent, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
+    if hasattr(opponent, "next_action"):
+        return int(opponent.next_action(board, player, rng))
+    if hasattr(opponent, "select_action"):
+        return int(opponent.select_action(board, player, rng))
+    raise TypeError("opponent must implement next_action(board, player, rng) or select_action(board, player, rng)")
 
 
 class VectorEnv:

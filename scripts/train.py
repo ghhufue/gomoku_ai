@@ -25,7 +25,7 @@ from gomoku_ai.model import (
 )
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 from gomoku_ai.run_registry import update_registry
-from gomoku_ai.rule_bot import RuleBasedBot
+from bots import create_bot
 from scripts.evaluate import evaluate_across_seeds
 
 
@@ -54,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-games", type=int, default=None)
     parser.add_argument("--eval-seeds", type=int, default=None)
     parser.add_argument("--show-progress", type=str, default=None)
+    parser.add_argument("--bot", type=str, default=None)
+    parser.add_argument("--bot-difficulty", type=str, default=None)
     return parser
 
 
@@ -276,6 +278,7 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
     training = config["training"]
     model = config["model"]
     evaluation = config["evaluation"]
+    opponent = config["opponent"]
     checkpoint = config["checkpoint"]
     artifacts = config["artifacts"]
 
@@ -297,6 +300,9 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
     )
     print(
         "evaluation: eval_every={eval_every} eval_games={eval_games} eval_seeds={eval_seeds}".format(**evaluation)
+    )
+    print(
+        "opponent: bot_name={bot_name} bot_difficulty={bot_difficulty}".format(**opponent)
     )
     print(
         "checkpoint: save_every={save_every} keep_best_model={keep_best_model} keep_final_model={keep_final_model} "
@@ -383,6 +389,7 @@ def main() -> None:
     runtime = raw_config["runtime"]
     training = raw_config["training"]
     evaluation = raw_config["evaluation"]
+    opponent_config = raw_config.get("opponent", {})
     artifacts = raw_config["artifacts"]
     checkpoint_policy = raw_config["checkpoint"]
     model_preset = str(args.model_preset or raw_config.get("model", {}).get("preset", "base")).lower()
@@ -421,6 +428,12 @@ def main() -> None:
             "eval_games": int(args.eval_games if args.eval_games is not None else evaluation["eval_games"]),
             "eval_seeds": int(args.eval_seeds if args.eval_seeds is not None else evaluation["eval_seeds"]),
         },
+        "opponent": {
+            "bot_name": str(args.bot if args.bot is not None else opponent_config.get("bot_name", "reward_driven_hard")),
+            "bot_difficulty": str(
+                args.bot_difficulty if args.bot_difficulty is not None else opponent_config.get("bot_difficulty", "")
+            ),
+        },
         "artifacts": {
             "tensorboard_dir": str(artifacts["tensorboard_dir"]),
             "checkpoint_dir": str(artifacts["checkpoint_dir"]),
@@ -446,7 +459,11 @@ def main() -> None:
     layout = resolve_run_layout(config)
     print_training_strategy(config, layout)
 
-    opponent = RuleBasedBot()
+    opponent = create_bot(
+        name=config["opponent"]["bot_name"],
+        difficulty=(config["opponent"]["bot_difficulty"] or None),
+        reward_config=reward,
+    )
     env = VectorEnv(
         GomokuEnv(
             opponent=opponent,

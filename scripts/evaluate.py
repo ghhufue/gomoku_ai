@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from gomoku_ai.env import BLACK, BOARD_SIZE, GomokuEnv, WHITE, action_to_coord
 from gomoku_ai.model import ActorCriticNet, model_config_from_checkpoint_payload
-from gomoku_ai.rule_bot import RuleBasedBot
+from bots import available_bots, available_difficulties, create_bot
 
 
 PLAYER_LABEL = {
@@ -26,13 +26,14 @@ PLAYER_LABEL = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate a Gomoku PPO checkpoint against the rule bot.")
+    parser = argparse.ArgumentParser(description="Evaluate a Gomoku PPO checkpoint against a configured bot.")
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--games", type=int, default=50)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--num-seeds", type=int, default=1)
-    parser.add_argument("--bot", type=str, default="rule", choices=["rule", "random"])
+    parser.add_argument("--bot", type=str, default="reward_driven_hard", choices=available_bots() + ["rule", "reward-driven"])
+    parser.add_argument("--bot-difficulty", type=str, default=None, choices=available_difficulties())
     parser.add_argument("--export-record", action="store_true", default=True, help="Export replay-compatible match records.")
     parser.add_argument("--no-export-record", action="store_false", dest="export_record", help="Disable replay-compatible match record export.")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/evaluation"))
@@ -60,18 +61,8 @@ def choose_action(model: ActorCriticNet, obs: np.ndarray, mask: np.ndarray, devi
     return int(action.item())
 
 
-class RandomBot:
-    def select_action(self, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
-        empties = np.flatnonzero(board.reshape(-1) == 0)
-        return int(rng.choice(empties))
-
-
-def build_opponent(bot_name: str):
-    if bot_name == "rule":
-        return RuleBasedBot()
-    if bot_name == "random":
-        return RandomBot()
-    raise ValueError(f"unsupported bot: {bot_name}")
+def build_opponent(bot_name: str, bot_difficulty: str | None = None):
+    return create_bot(name=bot_name, difficulty=bot_difficulty)
 
 
 def find_latest_checkpoint() -> Path:
@@ -159,11 +150,12 @@ def play_game(
     model: ActorCriticNet,
     device: str,
     seed: int,
-    bot_name: str = "rule",
+    bot_name: str = "reward_driven_hard",
+    bot_difficulty: str | None = None,
     verbose: bool = True,
     include_record: bool = False,
 ) -> dict[str, object]:
-    env = GomokuEnv(opponent=build_opponent(bot_name), seed=seed)
+    env = GomokuEnv(opponent=build_opponent(bot_name, bot_difficulty), seed=seed)
     obs, mask = env.reset()
 
     moves: list[dict[str, object]] = []
@@ -202,11 +194,11 @@ def play_game(
     game = {
         "game_index": 1,
         "name": f"game_seed_{seed}",
-        "description": f"model vs {bot_name} bot match exported by scripts/evaluate.py",
+        "description": f"model vs {bot_difficulty or bot_name} bot match exported by scripts/evaluate.py",
         "seed": seed,
         "agent_player": PLAYER_LABEL[agent_player],
         "bot_player": PLAYER_LABEL[bot_player],
-        "bot_name": bot_name,
+        "bot_name": bot_difficulty or bot_name,
         "result": outcome,
         "illegal_move": bool(result.info.get("illegal_move", False)),
         "winner": PLAYER_LABEL[result.info["winner"]] if "winner" in result.info else None,
@@ -224,7 +216,8 @@ def evaluate_model(
     games: int,
     device: str,
     seed: int,
-    bot_name: str = "rule",
+    bot_name: str = "reward_driven_hard",
+    bot_difficulty: str | None = None,
     verbose: bool = True,
 ) -> dict[str, float]:
     was_training = model.training
@@ -237,7 +230,15 @@ def evaluate_model(
     episode_lengths: list[int] = []
 
     for game_idx in range(games):
-        game = play_game(model=model, device=device, seed=seed + game_idx, bot_name=bot_name, verbose=verbose, include_record=False)
+        game = play_game(
+            model=model,
+            device=device,
+            seed=seed + game_idx,
+            bot_name=bot_name,
+            bot_difficulty=bot_difficulty,
+            verbose=verbose,
+            include_record=False,
+        )
         outcome = game["result"]
         if outcome == "win":
             wins += 1
@@ -270,12 +271,21 @@ def evaluate_across_seeds(
     games: int,
     device: str,
     seeds: list[int],
-    bot_name: str = "rule",
+    bot_name: str = "reward_driven_hard",
+    bot_difficulty: str | None = None,
     verbose: bool = True,
 ) -> dict[str, float]:
     runs: list[dict[str, float]] = []
     for seed in seeds:
-        metrics = evaluate_model(model=model, games=games, device=device, seed=seed, bot_name=bot_name, verbose=verbose)
+        metrics = evaluate_model(
+            model=model,
+            games=games,
+            device=device,
+            seed=seed,
+            bot_name=bot_name,
+            bot_difficulty=bot_difficulty,
+            verbose=verbose,
+        )
         metrics["seed"] = float(seed)
         runs.append(metrics)
         if verbose:
@@ -287,7 +297,7 @@ def evaluate_across_seeds(
     return {
         "games_per_seed": float(games),
         "num_seeds": float(len(seeds)),
-        "bot_name": bot_name,
+        "bot_name": bot_difficulty or bot_name,
         "total_games": float(games * len(seeds)),
         "wins": float(sum(run["wins"] for run in runs)),
         "losses": float(sum(run["losses"] for run in runs)),
@@ -431,6 +441,7 @@ def main(argv: list[str] | None = None) -> None:
         device=device,
         seeds=seeds,
         bot_name=args.bot,
+        bot_difficulty=args.bot_difficulty,
         verbose=verbose,
     )
     print_summary(metrics)
@@ -445,6 +456,7 @@ def main(argv: list[str] | None = None) -> None:
                         device=device,
                         seed=seed + game_idx,
                         bot_name=args.bot,
+                        bot_difficulty=args.bot_difficulty,
                         verbose=False,
                         include_record=True,
                     )

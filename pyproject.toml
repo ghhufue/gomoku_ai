@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["gomoku_ai*"]
+include = ["gomoku_ai*", "bots*"]
 
 [tool.setuptools.package-data]
 "gomoku_ai.model" = ["presets.toml"]

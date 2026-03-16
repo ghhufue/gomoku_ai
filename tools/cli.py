@@ -161,6 +161,8 @@ def run_evaluate_command(args: argparse.Namespace) -> int:
     argv.extend(["--seed", str(args.seed)])
     argv.extend(["--num-seeds", str(args.num_seeds)])
     argv.extend(["--bot", args.bot])
+    if args.bot_difficulty is not None:
+        argv.extend(["--bot-difficulty", args.bot_difficulty])
     argv.extend(["--output-dir", str(args.output_dir)])
     argv.extend(["--filename", args.filename])
 
@@ -374,7 +376,8 @@ def make_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--device", type=str, default="auto", help="Device: auto/cpu/cuda.")
     evaluate_parser.add_argument("--seed", type=int, default=123, help="Base seed.")
     evaluate_parser.add_argument("--num-seeds", type=int, default=1, help="Number of seeds to aggregate.")
-    evaluate_parser.add_argument("--bot", type=str, default="rule", choices=["rule", "random"], help="Opponent bot.")
+    evaluate_parser.add_argument("--bot", type=str, default="reward_driven_hard", help="Opponent bot name from configs/bots.toml.")
+    evaluate_parser.add_argument("--bot-difficulty", type=str, default=None, help="Opponent difficulty from configs/bots.toml.")
     evaluate_parser.add_argument("--output-dir", type=Path, default=Path("outputs/evaluation"), help="Export directory.")
     evaluate_parser.add_argument("--filename", type=str, default="match_record", help="Export filename stem.")
     evaluate_parser.add_argument("--quiet-games", action="store_true", help="Suppress per-game logs.")

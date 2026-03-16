@@ -79,6 +79,10 @@ eval_games = 20
 # 联合评估时使用多少个不同 seed。
 eval_seeds = 3
 
+[opponent]
+bot_name = "reward_driven_hard"
+bot_difficulty = ""
+
 [artifacts]
 # run 目录下用于保存 TensorBoard 日志的相对目录名。
 tensorboard_dir = "tensorboard"
