@@ -41,19 +41,76 @@ class LoadedRecord:
     name: str
     description: str
     steps: tuple[ReplayStep, ...]
+    metadata: dict[str, object]
 
 
 def list_records() -> list[Path]:
     return sorted(RECORDS_DIR.glob("*.json"))
 
 
-def load_record(path: Path, reward_config: RewardConfig | None = None) -> LoadedRecord:
+def normalize_single_game_payload(payload: dict[str, object], path: Path, game_index: int = 1) -> dict[str, object]:
+    if "games" in payload:
+        games = payload.get("games")
+        if not isinstance(games, list) or not games:
+            raise ValueError(f"record has no games: {path}")
+        selected_index = game_index - 1
+        if selected_index < 0 or selected_index >= len(games):
+            raise ValueError(f"game index out of range: {game_index}")
+        game = dict(games[selected_index])
+        game.setdefault("name", f"{path.stem}_game{game_index:02d}")
+        game.setdefault("description", "game extracted from multi-game match record")
+        game["_record_metadata"] = {
+            "schema_version": payload.get("schema_version"),
+            "record_type": payload.get("record_type"),
+            "checkpoint": payload.get("checkpoint"),
+            "device": payload.get("device"),
+            "selected_game_index": game_index,
+            "game_count": len(games),
+        }
+        return game
+
+    if "moves" in payload:
+        normalized = dict(payload)
+        normalized.setdefault("name", path.stem)
+        normalized.setdefault("description", "")
+        normalized["_record_metadata"] = {
+            "schema_version": payload.get("schema_version", 1),
+            "record_type": payload.get("record_type", "gomoku_record"),
+            "selected_game_index": 1,
+            "game_count": 1,
+        }
+        return normalized
+
+    raise ValueError(f"unsupported record format: {path}")
+
+
+def normalize_move(move: dict[str, object], fallback_index: int) -> dict[str, object]:
+    row = int(move["row"])
+    col = int(move["col"])
+    player_name = str(move.get("color", move.get("player", ""))).lower()
+    if player_name not in COLOR_TO_PLAYER:
+        raise ValueError(f"unsupported player/color value: {player_name}")
+    action = int(move.get("action", row * BOARD_SIZE + col))
+    return {
+        "move_number": int(move.get("move_number", fallback_index)),
+        "player": player_name,
+        "color": player_name,
+        "source": str(move.get("source", "record")),
+        "action": action,
+        "row": row,
+        "col": col,
+    }
+
+
+def load_record(path: Path, reward_config: RewardConfig | None = None, game_index: int = 1) -> LoadedRecord:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    game_payload = normalize_single_game_payload(payload, path, game_index=game_index)
     board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
     steps: list[ReplayStep] = []
     cfg = reward_config or RewardConfig()
 
-    for index, move in enumerate(payload["moves"], start=1):
+    for index, raw_move in enumerate(game_payload["moves"], start=1):
+        move = normalize_move(raw_move, fallback_index=index)
         row = int(move["row"])
         col = int(move["col"])
         player_name = str(move["color"]).lower()
@@ -70,7 +127,7 @@ def load_record(path: Path, reward_config: RewardConfig | None = None) -> Loaded
                 player_name=player_name,
                 row=row,
                 col=col,
-                source=str(move.get("source", "record")),
+                source=str(move["source"]),
                 reward=float(reward),
                 reward_components=reward_components,
                 board_before=board_before,
@@ -80,9 +137,10 @@ def load_record(path: Path, reward_config: RewardConfig | None = None) -> Loaded
         )
 
     return LoadedRecord(
-        name=str(payload.get("name", path.stem)),
-        description=str(payload.get("description", "")),
+        name=str(game_payload.get("name", path.stem)),
+        description=str(game_payload.get("description", "")),
         steps=tuple(steps),
+        metadata=dict(game_payload.get("_record_metadata", {})),
     )
 
 
@@ -96,6 +154,17 @@ def render_step(record: LoadedRecord, cursor: int) -> None:
     print(f"[record] {record.name}")
     if record.description:
         print(f"[desc] {record.description}")
+    if record.metadata:
+        checkpoint = record.metadata.get("checkpoint")
+        if checkpoint:
+            print(f"[checkpoint] {checkpoint}")
+        device = record.metadata.get("device")
+        if device:
+            print(f"[device] {device}")
+        selected_game_index = record.metadata.get("selected_game_index")
+        game_count = record.metadata.get("game_count")
+        if selected_game_index and game_count:
+            print(f"[game] {selected_game_index}/{game_count}")
     print(f"[step] {step.index}/{len(record.steps)}")
     print(f"[move] {step.player_name} -> ({step.row}, {step.col}) source={step.source}")
     print(f"[reward] total={step.reward:.2f}")
@@ -183,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay a record and inspect per-move reward.")
     parser.add_argument("--record", type=Path, default=None, help="Path to record JSON under tests/game_records or any JSON file.")
     parser.add_argument("--name", type=str, default=None, help="Record name under tests/game_records without .json.")
+    parser.add_argument("--game", type=int, default=1, help="Game index to replay when the record contains `games`.")
     parser.add_argument("--list", action="store_true", help="List available built-in records.")
     return parser
 
@@ -212,7 +282,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"record not found: {record_path}")
         return 1
 
-    record = load_record(record_path)
+    try:
+        record = load_record(record_path, game_index=args.game)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
     return replay_record(record)
 
 

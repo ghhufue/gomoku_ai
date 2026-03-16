@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "record_type": "gomoku_record",
+  "name": "block_live_three",
+  "description": "白棋在中路形成活三前驱压力，黑棋及时在一端进行阻挡。",
+  "moves": [
+    {"move_number": 1, "player": "white", "color": "white", "source": "sample", "action": 111, "row": 7, "col": 6},
+    {"move_number": 2, "player": "black", "color": "black", "source": "sample", "action": 160, "row": 10, "col": 10},
+    {"move_number": 3, "player": "white", "color": "white", "source": "sample", "action": 112, "row": 7, "col": 7},
+    {"move_number": 4, "player": "black", "color": "black", "source": "sample", "action": 161, "row": 10, "col": 11},
+    {"move_number": 5, "player": "white", "color": "white", "source": "sample", "action": 113, "row": 7, "col": 8},
+    {"move_number": 6, "player": "black", "color": "black", "source": "sample", "action": 110, "row": 7, "col": 5}
+  ]
+}

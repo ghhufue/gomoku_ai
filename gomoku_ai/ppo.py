@@ -11,6 +11,17 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 
 
+REWARD_COMPONENT_KEYS = (
+    "offense_bonus",
+    "defense_bonus",
+    "block_winning_bonus",
+    "block_four_bonus",
+    "unresolved_winning_penalty",
+    "unresolved_four_penalty",
+    "unresolved_live_three_penalty",
+)
+
+
 @dataclass
 class PPOConfig:
     n_envs: int = 8
@@ -27,6 +38,34 @@ class PPOConfig:
     epochs: int = 4
     device: str = "cpu"
     show_progress: bool = True
+
+
+def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    targets = np.asarray(y_true, dtype=np.float32)
+    predictions = np.asarray(y_pred, dtype=np.float32)
+    target_var = float(np.var(targets))
+    if target_var <= 1e-8:
+        return 0.0
+    return float(1.0 - np.var(targets - predictions) / target_var)
+
+
+def init_reward_component_stats() -> dict[str, float]:
+    return {key: 0.0 for key in REWARD_COMPONENT_KEYS}
+
+
+def accumulate_reward_component_stats(
+    totals: dict[str, float],
+    infos: list[dict],
+    count: int,
+) -> tuple[dict[str, float], int]:
+    for info in infos:
+        reward_components = info.get("reward_components")
+        if not isinstance(reward_components, dict):
+            continue
+        for key in REWARD_COMPONENT_KEYS:
+            totals[key] += float(reward_components.get(key, 0.0))
+        count += 1
+    return totals, count
 
 
 class RolloutBuffer:
@@ -113,6 +152,8 @@ class PPOTrainer:
         finished_rewards = np.zeros(self.config.n_envs, dtype=np.float32)
         finished_lengths = np.zeros(self.config.n_envs, dtype=np.int32)
         stats = {"wins": 0, "losses": 0, "draws": 0}
+        reward_component_totals = init_reward_component_stats()
+        reward_component_count = 0
         iterator = range(self.config.n_steps)
         if self.config.show_progress:
             iterator = tqdm(
@@ -130,6 +171,11 @@ class PPOTrainer:
                 actions, log_probs, values = self.model.sample_action(obs_tensor, mask_tensor)
 
             next_obs, next_masks, rewards, dones, infos = self.env.step(actions.cpu().numpy())
+            reward_component_totals, reward_component_count = accumulate_reward_component_stats(
+                reward_component_totals,
+                infos,
+                reward_component_count,
+            )
             buffer.add(
                 obs,
                 masks,
@@ -165,6 +211,8 @@ class PPOTrainer:
         data = buffer.compute_returns_advantages(last_values.cpu().numpy(), self.config)
         stats["ep_rew_mean"] = float(np.mean(episode_rewards)) if episode_rewards else 0.0
         stats["episodes"] = len(episode_rewards)
+        for key, total in reward_component_totals.items():
+            stats[key] = total / max(1, reward_component_count)
         return data, obs, masks, stats
 
     def update(self, rollout: dict[str, np.ndarray]) -> dict[str, float]:
@@ -174,7 +222,13 @@ class PPOTrainer:
 
         total_items = rollout["actions"].shape[0]
         indices = np.arange(total_items)
-        metrics = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0}
+        metrics = {
+            "policy_loss": 0.0,
+            "value_loss": 0.0,
+            "entropy": 0.0,
+            "approx_kl": 0.0,
+            "clip_fraction": 0.0,
+        }
         batches = 0
 
         for _ in range(self.config.epochs):
@@ -193,11 +247,14 @@ class PPOTrainer:
                 )
 
                 log_probs, entropy, values = self.model.evaluate_actions(obs, masks, actions)
+                log_ratio = log_probs - old_log_probs
                 ratio = torch.exp(log_probs - old_log_probs)
                 clipped_ratio = torch.clamp(ratio, 1.0 - self.config.clip_range, 1.0 + self.config.clip_range)
                 policy_loss = -torch.min(ratio * batch_advantages, clipped_ratio * batch_advantages).mean()
                 value_loss = torch.nn.functional.mse_loss(values, returns)
                 entropy_loss = entropy.mean()
+                approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                clip_fraction = (torch.abs(ratio - 1.0) > self.config.clip_range).float().mean()
 
                 loss = (
                     policy_loss
@@ -213,10 +270,13 @@ class PPOTrainer:
                 metrics["policy_loss"] += float(policy_loss.item())
                 metrics["value_loss"] += float(value_loss.item())
                 metrics["entropy"] += float(entropy_loss.item())
+                metrics["approx_kl"] += float(approx_kl.item())
+                metrics["clip_fraction"] += float(clip_fraction.item())
                 batches += 1
 
         for key in metrics:
             metrics[key] /= max(1, batches)
+        metrics["explained_variance"] = explained_variance(rollout["values"], rollout["returns"])
         return metrics
 
     def train(
@@ -287,7 +347,17 @@ class PPOTrainer:
         self.writer.add_scalar("train/draws", stats["draws"], update)
         self.writer.add_scalar("loss/policy", stats["policy_loss"], update)
         self.writer.add_scalar("loss/value", stats["value_loss"], update)
+        self.writer.add_scalar("value/explained_variance", stats["explained_variance"], update)
         self.writer.add_scalar("policy/entropy", stats["entropy"], update)
+        self.writer.add_scalar("policy/approx_kl", stats["approx_kl"], update)
+        self.writer.add_scalar("policy/clip_fraction", stats["clip_fraction"], update)
+        self.writer.add_scalar("reward/offense_bonus", stats["offense_bonus"], update)
+        self.writer.add_scalar("reward/defense_bonus", stats["defense_bonus"], update)
+        self.writer.add_scalar("reward/block_winning_bonus", stats["block_winning_bonus"], update)
+        self.writer.add_scalar("reward/block_four_bonus", stats["block_four_bonus"], update)
+        self.writer.add_scalar("reward/unresolved_winning_penalty", stats["unresolved_winning_penalty"], update)
+        self.writer.add_scalar("reward/unresolved_four_penalty", stats["unresolved_four_penalty"], update)
+        self.writer.add_scalar("reward/unresolved_live_three_penalty", stats["unresolved_live_three_penalty"], update)
         self.writer.add_scalar("train/learning_rate", self.optimizer.param_groups[0]["lr"], update)
         self.writer.add_scalar("perf/rollout_time_s", stats["rollout_time_s"], update)
         self.writer.add_scalar("perf/optimize_time_s", stats["optimize_time_s"], update)

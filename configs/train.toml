@@ -17,6 +17,11 @@ run_name = ""
 # 可选的恢复训练 checkpoint 路径。留空表示从头开始训练。
 resume_from = ""
 
+# 是否基于 resume_from 开启一个新的训练分支。
+# false: 继续写回被加载 checkpoint 所在的 run 目录。
+# true: 以该 checkpoint 为起点，在新的 run 目录中继续训练。
+start_new_branch = false
+
 # reward 配置文件路径。将奖惩策略单独放到独立 TOML 中维护。
 reward_config = "configs/reward.toml"
 
@@ -29,7 +34,7 @@ n_steps = 128
 
 # 本次执行要跑多少次 PPO update。
 # 如果是恢复训练，这里表示“额外再跑多少次”，不是总 update 数。
-updates = 200
+updates = 2000
 
 # PPO 小批量大小。
 batch_size = 256
@@ -38,7 +43,7 @@ batch_size = 256
 epochs = 4
 
 # Adam 学习率。
-lr = 0.0003
+lr = 0.0001
 
 # 是否显示训练进度条和中间输出。
 show_progress = true

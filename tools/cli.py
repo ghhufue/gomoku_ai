@@ -87,6 +87,42 @@ def run_test_command(args: argparse.Namespace) -> int:
     return test_env_main(argv)
 
 
+def run_evaluate_command(args: argparse.Namespace) -> int:
+    from scripts.evaluate import main as evaluate_main
+
+    argv: list[str] = []
+    if args.checkpoint is not None:
+        argv.extend(["--checkpoint", str(args.checkpoint)])
+    argv.extend(["--games", str(args.games)])
+    argv.extend(["--device", args.device])
+    argv.extend(["--seed", str(args.seed)])
+    argv.extend(["--num-seeds", str(args.num_seeds)])
+    argv.extend(["--bot", args.bot])
+    argv.extend(["--output-dir", str(args.output_dir)])
+    argv.extend(["--filename", args.filename])
+
+    if args.quiet_games:
+        argv.append("--quiet-games")
+
+    if args.export_record:
+        argv.append("--export-record")
+    else:
+        argv.append("--no-export-record")
+
+    if args.export_text:
+        argv.append("--export-text")
+    else:
+        argv.append("--no-export-text")
+
+    if args.export_visual:
+        argv.append("--export-visual")
+    else:
+        argv.append("--no-export-visual")
+
+    evaluate_main(argv)
+    return 0
+
+
 REWARD_FIELD_LABELS = {
     "terminal_reward": "终局奖励：当前落子直接成五时给分。",
     "live_four_reward": "活四奖励：形成活四时给分。",
@@ -243,6 +279,26 @@ def make_parser() -> argparse.ArgumentParser:
         help="Output directory for generated Markdown.",
     )
 
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate a checkpoint against a bot, with optional replay-compatible exports.",
+    )
+    evaluate_parser.add_argument("--checkpoint", type=Path, default=None, help="Model checkpoint path. Defaults to latest final_model.pt.")
+    evaluate_parser.add_argument("--games", type=int, default=50, help="Games per seed.")
+    evaluate_parser.add_argument("--device", type=str, default="auto", help="Device: auto/cpu/cuda.")
+    evaluate_parser.add_argument("--seed", type=int, default=123, help="Base seed.")
+    evaluate_parser.add_argument("--num-seeds", type=int, default=1, help="Number of seeds to aggregate.")
+    evaluate_parser.add_argument("--bot", type=str, default="rule", choices=["rule", "random"], help="Opponent bot.")
+    evaluate_parser.add_argument("--output-dir", type=Path, default=Path("outputs/evaluation"), help="Export directory.")
+    evaluate_parser.add_argument("--filename", type=str, default="match_record", help="Export filename stem.")
+    evaluate_parser.add_argument("--quiet-games", action="store_true", help="Suppress per-game logs.")
+    evaluate_parser.add_argument("--export-record", action="store_true", default=True, help="Export replay-compatible JSON.")
+    evaluate_parser.add_argument("--no-export-record", action="store_false", dest="export_record", help="Disable replay-compatible JSON export.")
+    evaluate_parser.add_argument("--export-text", action="store_true", default=True, help="Export text report.")
+    evaluate_parser.add_argument("--no-export-text", action="store_false", dest="export_text", help="Disable text report export.")
+    evaluate_parser.add_argument("--export-visual", action="store_true", default=True, help="Export visual JSON.")
+    evaluate_parser.add_argument("--no-export-visual", action="store_false", dest="export_visual", help="Disable visual JSON export.")
+
     return parser
 
 
@@ -266,6 +322,9 @@ def main() -> int:
 
     if args.command == "reward-table":
         return run_reward_table_command(args)
+
+    if args.command == "evaluate":
+        return run_evaluate_command(args)
 
     parser.print_help()
     return 1

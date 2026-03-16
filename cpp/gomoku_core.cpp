@@ -126,6 +126,23 @@ bool contains_pattern(std::string_view window, const std::array<std::string_view
     return false;
 }
 
+bool is_rush_four_window(std::string_view window) {
+    int stones = 0;
+    int empties = 0;
+    std::array<char, 7> filled_buffer{};
+    for (int index = 0; index < static_cast<int>(window.size()); ++index) {
+        const char symbol = window[index];
+        stones += (symbol == 'X');
+        empties += (symbol == '_');
+        filled_buffer[index] = (symbol == '_') ? 'X' : symbol;
+    }
+    if (stones != 4 || empties != 1) {
+        return false;
+    }
+    const std::string_view filled(filled_buffer.data(), window.size());
+    return filled.find("XXXXX") != std::string_view::npos;
+}
+
 int gap_bucket_id(std::string_view window) {
     int first = -1;
     int last = -1;
@@ -251,13 +268,9 @@ Pattern analyze_direction(const Board& board, int row, int col, int dr, int dc, 
         const int start_max = std::min(ANALYZE_CENTER, static_cast<int>(line.size()) - length);
         for (int start = start_min; start <= start_max; ++start) {
             std::array<char, 7> window_buffer{};
-            int stones = 0;
-            int empties = 0;
             for (int offset = 0; offset < length; ++offset) {
                 const char symbol = line[start + offset];
                 window_buffer[offset] = symbol;
-                stones += (symbol == 'X');
-                empties += (symbol == '_');
             }
             const std::string_view window(window_buffer.data(), length);
 
@@ -265,7 +278,7 @@ Pattern analyze_direction(const Board& board, int row, int col, int dr, int dc, 
                 pattern.live_four = 1;
                 continue;
             }
-            if (stones == 4 && empties == 1) {
+            if (is_rush_four_window(window)) {
                 pattern.rush_four = 1;
                 continue;
             }
@@ -312,13 +325,9 @@ DirectionShapeDetails analyze_direction_shape_details(
         const int start_max = std::min(ANALYZE_CENTER, static_cast<int>(line.size()) - length);
         for (int start = start_min; start <= start_max; ++start) {
             std::array<char, 7> window_buffer{};
-            int stones = 0;
-            int empties = 0;
             for (int offset = 0; offset < length; ++offset) {
                 const char symbol = line[start + offset];
                 window_buffer[offset] = symbol;
-                stones += (symbol == 'X');
-                empties += (symbol == '_');
             }
             const std::string_view window(window_buffer.data(), length);
 
@@ -326,7 +335,7 @@ DirectionShapeDetails analyze_direction_shape_details(
                 update_detail(details.live_four, "live_four", window);
                 continue;
             }
-            if (stones == 4 && empties == 1) {
+            if (is_rush_four_window(window)) {
                 update_detail(details.rush_four, "rush_four", window);
                 continue;
             }

@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "record_type": "gomoku_record",
+  "name": "model_loss_line",
+  "description": "来自现有对局记录的样例，黑棋在中路连续施压。",
+  "moves": [
+    {"move_number": 1, "player": "black", "color": "black", "source": "bot", "action": 112, "row": 7, "col": 7},
+    {"move_number": 2, "player": "white", "color": "white", "source": "model", "action": 141, "row": 9, "col": 6},
+    {"move_number": 3, "player": "black", "color": "black", "source": "bot", "action": 97, "row": 6, "col": 7},
+    {"move_number": 4, "player": "white", "color": "white", "source": "model", "action": 173, "row": 11, "col": 8},
+    {"move_number": 5, "player": "black", "color": "black", "source": "bot", "action": 127, "row": 8, "col": 7},
+    {"move_number": 6, "player": "white", "color": "white", "source": "model", "action": 157, "row": 10, "col": 7},
+    {"move_number": 7, "player": "black", "color": "black", "source": "bot", "action": 82, "row": 5, "col": 7},
+    {"move_number": 8, "player": "white", "color": "white", "source": "model", "action": 125, "row": 8, "col": 5},
+    {"move_number": 9, "player": "black", "color": "black", "source": "bot", "action": 142, "row": 9, "col": 7}
+  ]
+}

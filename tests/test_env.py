@@ -420,6 +420,35 @@ def test_evaluate_shape_reward_penalizes_ignoring_opponent_live_four() -> None:
     assert reward < 0.0
 
 
+def test_threat_summary_does_not_count_dead_four_as_rush_four() -> None:
+    board = empty_board()
+    place_many(board, [(7, 4, BLACK), (7, 5, -BLACK), (7, 6, -BLACK), (7, 7, -BLACK), (7, 8, -BLACK), (7, 9, BLACK)])
+
+    summary = threat_summary(board, -BLACK)
+
+    assert summary["winning_actions"] == 0
+    assert summary["live_four"] == 0
+    assert summary["rush_four"] == 0
+
+
+def test_evaluate_shape_reward_does_not_penalize_ignoring_dead_four() -> None:
+    board_before = empty_board()
+    place_many(board_before, [(7, 4, BLACK), (7, 5, -BLACK), (7, 6, -BLACK), (7, 7, -BLACK), (7, 8, -BLACK), (7, 9, BLACK)])
+    board_after = board_before.copy()
+    board_after[10, 10] = BLACK
+
+    reward, info = evaluate_shape_reward(board_before, board_after, 10, 10, BLACK)
+
+    assert info["opp_threats_before"]["winning_actions"] == 0
+    assert info["opp_threats_before"]["live_four"] == 0
+    assert info["opp_threats_before"]["rush_four"] == 0
+    assert info["opp_threats_after"]["live_four"] == 0
+    assert info["opp_threats_after"]["rush_four"] == 0
+    assert info["unresolved_four_threat"] is False
+    assert info["reward_components"]["unresolved_four_penalty"] == 0.0
+    assert reward > -DEFAULT_REWARD_CONFIG.unresolved_four_threat_penalty
+
+
 def test_evaluate_shape_reward_penalizes_ignoring_opponent_live_three() -> None:
     board_before = empty_board()
     place_many(board_before, [(7, 6, -BLACK), (7, 7, -BLACK), (7, 8, -BLACK)])

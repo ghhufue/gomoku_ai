@@ -47,7 +47,7 @@ offense_delta_scale = 0.12
 offense_delta_limit = 40.0
 
 # 对手威胁下降转成奖励时的缩放系数。
-defense_delta_scale = 0.15
+defense_delta_scale = 0.25
 
 # 防守增量奖励的最大值。
 defense_delta_limit = 60.0

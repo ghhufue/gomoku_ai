@@ -193,14 +193,12 @@ def analyze_direction(board: np.ndarray, row: int, col: int, dr: int, dc: int, p
 
     for start, end in ANALYZE_WINDOW_SPANS:
         window = line[start:end]
-        stones = window.count("X")
-        empties = window.count("_")
 
         if window in LIVE_FOUR_PATTERNS:
             live_four = 1
             continue
 
-        if stones == 4 and empties == 1:
+        if is_rush_four_window(window):
             rush_four = 1
             continue
 
@@ -221,6 +219,13 @@ def analyze_direction(board: np.ndarray, row: int, col: int, dr: int, dc: int, p
     return (0, live_four, rush_four, live_three, sleep_three, live_two)
 
 
+def is_rush_four_window(window: str) -> bool:
+    if window.count("X") != 4 or window.count("_") != 1:
+        return False
+    filled = window.replace("_", "X")
+    return "XXXXX" in filled
+
+
 def gap_bucket(window: str) -> str:
     positions = [index for index, symbol in enumerate(window) if symbol == "X"]
     if len(positions) <= 1:
@@ -238,12 +243,9 @@ def shape_scale(reward_config: RewardConfig, family: str, bucket: str) -> float:
 
 
 def evaluate_window_family(window: str) -> tuple[str, str] | None:
-    stones = window.count("X")
-    empties = window.count("_")
-
     if window in LIVE_FOUR_PATTERNS:
         return ("live_four", gap_bucket(window))
-    if stones == 4 and empties == 1:
+    if is_rush_four_window(window):
         return ("rush_four", gap_bucket(window))
     if window in DETAILED_LIVE_THREE_PATTERNS:
         return ("live_three", gap_bucket(window))

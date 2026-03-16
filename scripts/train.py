@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument("--start-new-branch", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--n-envs", type=int, default=None)
     parser.add_argument("--n-steps", type=int, default=None)
@@ -47,6 +48,19 @@ def resolve_device(requested: str) -> str:
     if requested == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     return requested
+
+
+def parse_bool_flag(value: str | bool | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"invalid boolean value: {value}")
 
 
 def save_checkpoint(
@@ -127,15 +141,28 @@ def config_path(value: str) -> Path | None:
     return Path(value).resolve() if value else None
 
 
+def infer_run_dir_from_resume_path(resume_path: Path, artifacts: dict) -> Path:
+    resolved = resume_path.resolve()
+    checkpoint_dir_name = str(artifacts["checkpoint_dir"])
+    final_model_name = str(artifacts["final_model_name"])
+
+    if resolved.parent.name == checkpoint_dir_name:
+        return resolved.parent.parent
+    if resolved.name == final_model_name:
+        return resolved.parent
+    return resolved.parent
+
+
 def resolve_run_layout(config: dict) -> dict[str, Path]:
     runtime = config["runtime"]
     artifacts = config["artifacts"]
     resume_from = runtime["resume_from"]
     run_name = runtime["run_name"]
     run_root = runtime["run_root"]
+    start_new_branch = bool(runtime.get("start_new_branch", False))
 
-    if resume_from is not None and run_name is None:
-        run_dir = resume_from.resolve().parent.parent
+    if resume_from is not None and run_name is None and not start_new_branch:
+        run_dir = infer_run_dir_from_resume_path(resume_from, artifacts)
     else:
         resolved_run_name = run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = (run_root / resolved_run_name).resolve()
@@ -224,6 +251,7 @@ def main() -> None:
             "run_root": Path(runtime["run_root"]).resolve(),
             "run_name": args.run_name if args.run_name is not None else (runtime["run_name"] or None),
             "resume_from": args.resume_from.resolve() if args.resume_from is not None else config_path(runtime["resume_from"]),
+            "start_new_branch": parse_bool_flag(args.start_new_branch, default=bool(runtime.get("start_new_branch", False))),
             "reward_config": reward_config_path,
         },
         "training": {
