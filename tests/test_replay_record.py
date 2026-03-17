@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from tests.replay_record import load_record
+from tools.replay_record import load_record
 
 
 def test_load_record_supports_simple_record_payload(tmp_path) -> None:

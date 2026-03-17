@@ -2,24 +2,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.tensorboard import SummaryWriter
-from tqdm.auto import tqdm
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ModuleNotFoundError:  # pragma: no cover - optional training dependency
+    SummaryWriter = Any
+
+try:
+    from tqdm.auto import tqdm
+except ModuleNotFoundError:  # pragma: no cover - optional training dependency
+    def tqdm(iterable=None, *args, **kwargs):
+        return iterable
 
 
-REWARD_COMPONENT_KEYS = (
-    "offense_bonus",
-    "defense_bonus",
-    "block_winning_bonus",
-    "block_four_bonus",
-    "unresolved_winning_penalty",
-    "unresolved_four_penalty",
-    "unresolved_live_three_penalty",
-)
+REWARD_COMPONENT_KEYS = ("total_reward",)
 
 
 @dataclass
@@ -351,13 +352,7 @@ class PPOTrainer:
         self.writer.add_scalar("policy/entropy", stats["entropy"], update)
         self.writer.add_scalar("policy/approx_kl", stats["approx_kl"], update)
         self.writer.add_scalar("policy/clip_fraction", stats["clip_fraction"], update)
-        self.writer.add_scalar("reward/offense_bonus", stats["offense_bonus"], update)
-        self.writer.add_scalar("reward/defense_bonus", stats["defense_bonus"], update)
-        self.writer.add_scalar("reward/block_winning_bonus", stats["block_winning_bonus"], update)
-        self.writer.add_scalar("reward/block_four_bonus", stats["block_four_bonus"], update)
-        self.writer.add_scalar("reward/unresolved_winning_penalty", stats["unresolved_winning_penalty"], update)
-        self.writer.add_scalar("reward/unresolved_four_penalty", stats["unresolved_four_penalty"], update)
-        self.writer.add_scalar("reward/unresolved_live_three_penalty", stats["unresolved_live_three_penalty"], update)
+        self.writer.add_scalar("reward/total_reward", stats["total_reward"], update)
         self.writer.add_scalar("train/learning_rate", self.optimizer.param_groups[0]["lr"], update)
         self.writer.add_scalar("perf/rollout_time_s", stats["rollout_time_s"], update)
         self.writer.add_scalar("perf/optimize_time_s", stats["optimize_time_s"], update)

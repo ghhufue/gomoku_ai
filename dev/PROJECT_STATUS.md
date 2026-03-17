@@ -230,6 +230,120 @@
 - 直接引入 MCTS
 - 在训练主链路里加入复杂搜索
 
+## Reward Refactor Task
+
+Current reward is still based on threat-summary deltas. The next major task is to refactor it toward an event-driven reward system while keeping the old path as a validation baseline.
+
+Target direction:
+- Reward should be split into two parts:
+  - offense: new shapes created for the current player by the placed stone
+  - defense: opponent shapes broken or weakened by the placed stone
+- Calculation should start from the placed move and scan the four directions only
+- Reward should be driven by local state changes instead of global threat-summary differences
+
+Required event tracking:
+- Detect shape creation, destruction, upgrade, downgrade, and conversion
+- Example transitions that must be tracked:
+  - creating a live three
+  - after opponent defense, my live three becomes `-1` and sleep/dead three becomes `+1`
+  - when a rush four is formed, previous dead/sleep three count should decrease and dead/rush four count should increase
+  - a live two can become a sleep/dead three after colliding with stones or being blocked
+- Similar shape-transition bookkeeping must be handled in a fine-grained way
+
+Implementation constraints:
+- First modify the C++ backend in [cpp/gomoku_core.cpp](/d:/code/gomoku_ai/cpp/gomoku_core.cpp)
+- Do not immediately delete `threat_summary`
+- Implement the new event-driven method separately first
+- Put the validation/comparison utility under `utils/`
+
+Validation plan:
+- Build a fixed dataset for comparison, using fixed board records / fixed move sequences
+- For each move, compare:
+  - the variables maintained by the new event-driven tracker
+  - the result implied by the current `threat_summary`-based method
+- Use the old method only as a consistency baseline before replacing the reward path
+
+Recommended execution order for the next AI:
+1. Define the event/state representation for shape transitions
+2. Implement local event extraction in C++
+3. Expose the new path without removing the old one
+4. Build a comparison tool under `utils/`
+5. Create fixed board-sequence test data
+6. Verify whether event-driven state changes are consistent with the existing `threat_summary` baseline
+7. Only after validation, consider replacing the reward main path
+
+### Current Progress Snapshot
+
+Completed:
+- Added a dedicated reward-event registry in C++:
+  - [cpp/reward_events.h](/d:/code/gomoku_ai/cpp/reward_events.h)
+  - [cpp/reward_events.cpp](/d:/code/gomoku_ai/cpp/reward_events.cpp)
+- `RewardEventId` is now narrowed to the intended three families:
+  - `create`
+  - `block`
+  - `unresolved`
+- Event ids are further refined by shape/variant, including:
+  - live two contiguous / gap1
+  - live three contiguous / gap1 / gap2
+  - sleep three contiguous / gap1 / gap2
+  - live four contiguous / gap1
+  - rush four contiguous / gap1
+- Added a separate directional encoding module:
+  - [cpp/direction_encoding.h](/d:/code/gomoku_ai/cpp/direction_encoding.h)
+  - [cpp/direction_encoding.cpp](/d:/code/gomoku_ai/cpp/direction_encoding.cpp)
+- Direction encoding has been abstracted to clearer C++ types:
+  - `Stone`
+  - `Vec2i`
+  - `Direction`
+  - `DirectionLine`
+- Current directional encoding flow is:
+  1. `extract_direction_line(...)`
+  2. `line_to_side_cells(...)`
+  3. `encode_direction_side_cells(...)`
+- Current encoding assumptions:
+  - `0 = empty`
+  - `1 = self`
+  - `2 = other`
+  - out-of-board cells are normalized to `empty`
+  - center stone is implicit and not encoded into the side-state key
+- Current lookup-key design:
+  - input is a fixed 10-cell side-state array
+  - edge empty cells are trimmed
+  - trimmed sequence is base-3 encoded
+  - final key is bucketed by effective length so shorter effective sequences map to smaller keys
+- Added debug/test plumbing for the encoding layer and event registry:
+  - [tests/test_direction_encoding.py](/d:/code/gomoku_ai/tests/test_direction_encoding.py)
+  - [tests/test_cpp_reward_events.py](/d:/code/gomoku_ai/tests/test_cpp_reward_events.py)
+- Added interface contract doc for the target Python/C++ reward boundary:
+  - [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md)
+
+Not done yet:
+- The actual C++ reward algorithm is still not implemented.
+- The lookup table contents are still not populated with real shape/event results.
+- `gomoku_core.cpp` still does not expose the final compact reward entrypoint described in [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md):
+  - `reward`
+  - `offense_score`
+  - `defense_score`
+  - `events: [(event_id, count), ...]`
+- `configs/reward.toml` is still not owned/loaded by the C++ side.
+- Python reward logic is still not aligned with the target contract:
+  - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) still computes reward in Python
+  - existing threat-summary-based reward logic is still active
+  - Python still contains old reward-config interpretation and reward assembly logic
+- Python-side consumers are not fully aligned yet:
+  - env step/info payload still follows the current Python reward path
+  - debug/replay/bot tooling still assumes current Python-side reward structures in several places
+  - tests are still centered on the existing Python reward behavior, not the final compact C++ reward API
+
+Next concrete steps:
+1. Define the integer payload format for lookup-table values.
+2. Implement table build/load logic in C++.
+3. Map directional lookup results to `RewardEventId + count`.
+4. Add the final C++ reward entrypoint returning compact numeric payload only.
+5. Move reward-config ownership into C++.
+6. Simplify [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) to consume the C++ reward result directly.
+7. Update Python tools/tests to the new compact API after the C++ path is stable.
+
 ## 接手建议
 
 建议优先阅读：

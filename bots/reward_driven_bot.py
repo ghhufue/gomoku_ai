@@ -5,12 +5,10 @@ import numpy as np
 from bots.base import Bot
 from gomoku_ai.env import (
     BOARD_SIZE,
-    DEFAULT_REWARD_CONFIG,
     EMPTY,
-    RewardConfig,
     action_to_coord,
     coord_to_action,
-    evaluate_shape_reward,
+    evaluate_reward,
 )
 
 
@@ -39,11 +37,9 @@ def neighboring_actions_with_radius(board: np.ndarray, radius: int) -> list[int]
 class RewardDrivenBot(Bot):
     def __init__(
         self,
-        reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
         candidate_radius: int = 2,
         top_k: int = 1,
     ):
-        self.reward_config = reward_config
         self.candidate_radius = max(1, int(candidate_radius))
         self.top_k = max(1, int(top_k))
 
@@ -57,16 +53,7 @@ class RewardDrivenBot(Bot):
 
         for action in candidates:
             row, col = action_to_coord(action)
-            board_after = board.copy()
-            board_after[row, col] = player
-            reward, _ = evaluate_shape_reward(
-                board,
-                board_after,
-                row,
-                col,
-                player,
-                reward_config=self.reward_config,
-            )
+            reward, _ = evaluate_reward(board, row, col, player)
             scored_actions.append((float(reward), int(action)))
 
         scored_actions.sort(key=lambda item: item[0], reverse=True)

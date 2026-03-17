@@ -10,7 +10,6 @@ from pathlib import Path
 import pstats
 import sys
 from time import perf_counter
-import tomllib
 
 import numpy as np
 import torch
@@ -21,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 import gomoku_ai.env as env_mod
 from bots import create_bot
-from gomoku_ai.env import DEFAULT_REWARD_CONFIG, GomokuEnv, RewardConfig, VectorEnv
+from gomoku_ai.env import GomokuEnv, VectorEnv
 from gomoku_ai.model import ActorCriticNet, MODEL_PRESETS, model_preset_config
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 
@@ -82,16 +81,7 @@ def wrap_callable(collector: ProfileCollector, name: str, fn):
 
 
 def instrument_env_module(collector: ProfileCollector, patches: PatchManager) -> None:
-    for name in (
-        "evaluate_shape_reward",
-        "threat_summary",
-        "classify_move_counts",
-        "classify_move_shape_details",
-        "affected_actions",
-        "apply_local_threat_delta",
-        "summary_score",
-        "move_pattern_reward",
-    ):
+    for name in ("evaluate_reward", "threat_summary", "classify_move_counts"):
         patches.patch_attr(env_mod, name, wrap_callable(collector, f"env.{name}", getattr(env_mod, name)))
 
 
@@ -117,50 +107,23 @@ def resolve_device(requested: str) -> str:
     return requested
 
 
-def flatten_reward_payload(raw_reward: dict | None) -> dict | None:
-    if raw_reward is None:
-        return None
-    if "reward" in raw_reward and isinstance(raw_reward["reward"], dict):
-        raw_reward = raw_reward["reward"]
-    flattened: dict[str, object] = {}
-    for value in raw_reward.values():
-        if isinstance(value, dict):
-            flattened.update(value)
-    return flattened or raw_reward
-
-
-def build_reward_config(raw_reward: dict | None) -> RewardConfig:
-    flattened = flatten_reward_payload(raw_reward)
-    if flattened is None:
-        return DEFAULT_REWARD_CONFIG
-    defaults = DEFAULT_REWARD_CONFIG.__dict__
-    payload = {key: flattened.get(key, defaults[key]) for key in defaults}
-    return RewardConfig(**payload)
-
-
 def load_train_config(config_path: Path) -> dict:
-    return tomllib.loads(config_path.read_text(encoding="utf-8"))
+    import tomllib
 
-
-def load_reward_config(config_path: Path | None) -> dict | None:
-    if config_path is None or not config_path.exists():
-        return None
     return tomllib.loads(config_path.read_text(encoding="utf-8"))
 
 
 def build_envs(
     n_envs: int,
     seed: int,
-    reward_config: RewardConfig,
     bot_name: str,
     bot_difficulty: str | None,
 ) -> VectorEnv:
-    opponent = create_bot(name=bot_name, difficulty=bot_difficulty, reward_config=reward_config)
+    opponent = create_bot(name=bot_name, difficulty=bot_difficulty)
     return VectorEnv(
         GomokuEnv(
             opponent=opponent,
             seed=seed + idx,
-            reward_config=reward_config,
         )
         for idx in range(n_envs)
     )
@@ -252,7 +215,6 @@ def profile_single_preset(
     *,
     training_cfg: dict,
     opponent_cfg: dict,
-    reward_config: RewardConfig,
     device: str,
     seed: int,
     verbose: bool = True,
@@ -262,7 +224,6 @@ def profile_single_preset(
     env = build_envs(
         n_envs=int(training_cfg["n_envs"]),
         seed=seed,
-        reward_config=reward_config,
         bot_name=str(opponent_cfg["bot_name"]),
         bot_difficulty=(str(opponent_cfg["bot_difficulty"]) or None),
     )
@@ -418,11 +379,6 @@ def training_profile_mode(args: argparse.Namespace) -> int:
     training = raw_config["training"]
     opponent = raw_config.get("opponent", {})
 
-    reward_config_path = Path(runtime.get("reward_config", "configs/reward.toml"))
-    if not reward_config_path.is_absolute():
-        reward_config_path = (ROOT / reward_config_path).resolve()
-    reward_config = build_reward_config(load_reward_config(reward_config_path))
-
     training_cfg = {
         "n_envs": args.n_envs if args.n_envs is not None else training["n_envs"],
         "n_steps": args.n_steps if args.n_steps is not None else training["n_steps"],
@@ -460,7 +416,6 @@ def training_profile_mode(args: argparse.Namespace) -> int:
                 preset,
                 training_cfg=training_cfg,
                 opponent_cfg=opponent_cfg,
-                reward_config=reward_config,
                 device=device,
                 seed=args.seed + index * 1000,
                 verbose=True,

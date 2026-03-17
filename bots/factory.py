@@ -3,8 +3,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from gomoku_ai.env import DEFAULT_REWARD_CONFIG, RewardConfig
-
 from bots.base import Bot
 from bots.classic_rule_bot import ClassicRuleBot
 from bots.random_bot import RandomBot
@@ -46,7 +44,6 @@ def create_bot(
     name: str | None = None,
     *,
     difficulty: str | None = None,
-    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
     config_path: Path = DEFAULT_BOT_CONFIG_PATH,
 ) -> Bot:
     registry = load_bot_registry(config_path)
@@ -61,7 +58,6 @@ def create_bot(
     kind = str(payload["kind"]).strip().lower()
     if kind == "reward_driven":
         return RewardDrivenBot(
-            reward_config=reward_config,
             candidate_radius=int(payload.get("candidate_radius", 2)),
             top_k=int(payload.get("top_k", 1)),
         )

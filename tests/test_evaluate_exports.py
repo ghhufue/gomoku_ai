@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 from scripts.evaluate import build_export_session_dir, build_match_payload, derive_model_label, export_match_outputs
-from tests.replay_record import load_record
+from tools.replay_record import load_record
 
 
 def sample_game(seed: int, move_row: int, move_col: int) -> dict[str, object]:

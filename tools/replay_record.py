@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, WHITE, RewardConfig, evaluate_shape_reward
+from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, WHITE, evaluate_reward
 from utils.board_printer import print_board
 
 
@@ -102,12 +102,11 @@ def normalize_move(move: dict[str, object], fallback_index: int) -> dict[str, ob
     }
 
 
-def load_record(path: Path, reward_config: RewardConfig | None = None, game_index: int = 1) -> LoadedRecord:
+def load_record(path: Path, game_index: int = 1) -> LoadedRecord:
     payload = json.loads(path.read_text(encoding="utf-8"))
     game_payload = normalize_single_game_payload(payload, path, game_index=game_index)
     board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
     steps: list[ReplayStep] = []
-    cfg = reward_config or RewardConfig()
 
     for index, raw_move in enumerate(game_payload["moves"], start=1):
         move = normalize_move(raw_move, fallback_index=index)
@@ -118,8 +117,12 @@ def load_record(path: Path, reward_config: RewardConfig | None = None, game_inde
         board_before = board.copy()
         board[row, col] = player
         board_after = board.copy()
-        reward, info = evaluate_shape_reward(board_before, board_after, row, col, player, reward_config=cfg)
-        reward_components = {key: float(value) for key, value in info.get("reward_components", {}).items()}
+        reward, info = evaluate_reward(board_before, row, col, player)
+        reward_components = {
+            "reward": float(info.get("reward", reward)),
+            "offense_score": float(info.get("offense_score", 0.0)),
+            "defense_score": float(info.get("defense_score", 0.0)),
+        }
         steps.append(
             ReplayStep(
                 index=index,
@@ -175,12 +178,12 @@ def render_step(record: LoadedRecord, cursor: int) -> None:
     print("[reward_components]")
     for key, value in step.reward_components.items():
         print(f"  - {key}: {value:.2f}")
-    print("[self_pattern]")
-    print(f"  - {step.info.get('self_pattern')}")
-    print("[opp_threats_before]")
-    print(f"  - {step.info.get('opp_threats_before')}")
-    print("[opp_threats_after]")
-    print(f"  - {step.info.get('opp_threats_after')}")
+    print("[event_deltas]")
+    print(f"  - offense: {step.info.get('event_deltas', {}).get('offense_delta')}")
+    print(f"  - defense: {step.info.get('event_deltas', {}).get('defense_delta')}")
+    print("[events]")
+    for event in step.info.get("events", []):
+        print(f"  - {event}")
     print()
     print("←/→ 切换步数，A/D 也可，Q 退出。")
 
