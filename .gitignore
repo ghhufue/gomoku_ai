@@ -11,6 +11,7 @@ venv/
 outputs/
 build/
 dist/
+*.obj
 *.egg-info/
 gomoku_ai/*.pyd
 gomoku_ai/*.dll
