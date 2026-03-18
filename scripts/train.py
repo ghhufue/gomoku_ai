@@ -12,7 +12,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
+from gomoku_ai import env as env_module
+env_module.FORCE_FOUR_TRAINING_UNTIL = 50
 from gomoku_ai.env import SubprocVectorEnv
 from gomoku_ai.model import (
     MODEL_PRESETS,

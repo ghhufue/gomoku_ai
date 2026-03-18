@@ -17,7 +17,7 @@ from gomoku_ai.cpp_backend import (
     reset_env_state as cpp_reset_env_state,
 )
 
-
+FORCE_FOUR_TRAINING_UNTIL = 0
 BOARD_SIZE = 15
 BOARD_AREA = BOARD_SIZE * BOARD_SIZE
 
@@ -239,6 +239,20 @@ def _py_threat_summary(board: np.ndarray, player: int, actions: Iterable[int] | 
         summary["live_two"] += pattern[LIVE_TWO_IDX]
     return summary
 
+def _find_move_to_make_four(board: np.ndarray, player: int) -> int | None:
+    for action in empty_actions(board):
+        row, col = action_to_coord(int(action))
+        board[row, col] = player
+        pattern = classify_move_counts(board, row, col, player)
+        board[row, col] = EMPTY
+        if pattern[LIVE_FOUR_IDX] > 0 or pattern[RUSH_FOUR_IDX] > 0:
+            return int(action)
+    return None
+
+
+def _has_live_three(board: np.ndarray, player: int) -> bool:
+    summary = threat_summary(board, player)
+    return summary["live_three"] > 0
 
 def threat_summary(board: np.ndarray, player: int, actions: Iterable[int] | None = None) -> dict[str, int]:
     return _py_threat_summary(board, player, actions)
@@ -265,6 +279,7 @@ class GomokuEnv:
         self.done = False
         self.env_id = GomokuEnv._next_env_id
         GomokuEnv._next_env_id += 1
+        self.current_update = 0
 
     def __del__(self):
         if CPP_BACKEND_AVAILABLE:
@@ -333,7 +348,15 @@ class GomokuEnv:
                 info["agent_result"] = "draw"
             return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
-        opponent_action = call_bot_action(self.opponent, self.board.copy(), -self.agent_player, self.rng)
+        opponent_action = None
+        if FORCE_FOUR_TRAINING_UNTIL > 0 and self.current_update <= FORCE_FOUR_TRAINING_UNTIL:
+            if _has_live_three(self.board, -self.agent_player):
+                forced = _find_move_to_make_four(self.board, -self.agent_player)
+                if forced is not None:
+                    opponent_action = forced
+
+        if opponent_action is None:
+            opponent_action = call_bot_action(self.opponent, self.board.copy(), -self.agent_player, self.rng)
         opp_row, opp_col = action_to_coord(opponent_action)
         if self.board[opp_row, opp_col] != EMPTY:
             fallback = int(self.rng.choice(empty_actions(self.board)))
@@ -395,6 +418,13 @@ def _subproc_vector_worker(connection, env_specs: list[dict]) -> None:
             if command == "reset":
                 obs, masks = zip(*(env.reset() for env in envs))
                 connection.send((np.stack(obs), np.stack(masks)))
+                continue
+            
+            if command == "set_update":
+                update = int(payload)
+                for env in envs:
+                    env.current_update = update
+                connection.send(True)
                 continue
 
             if command == "step":
@@ -499,6 +529,12 @@ class SubprocVectorEnv:
             self.parents.append(parent_conn)
             self.processes.append(process)
             self.worker_sizes.append(len(chunk))
+    
+    def set_current_update(self, update: int) -> None:
+        for parent in self.parents:
+            parent.send(("set_update", int(update)))
+        for parent in self.parents:
+            parent.recv()
 
     def reset(self) -> tuple[np.ndarray, np.ndarray]:
         for parent in self.parents:
