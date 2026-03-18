@@ -34,7 +34,7 @@ n_steps = 128
 
 # 本次执行要跑多少次 PPO update。
 # 如果是恢复训练，这里表示“额外再跑多少次”，不是总 update 数。
-updates = 2000
+updates = 400
 
 # PPO 小批量大小。
 batch_size = 256
