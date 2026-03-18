@@ -1,4 +1,4 @@
-#include "direction_delta_table.h"
+#include "DirectionDeltaTable.h"
 
 #include <array>
 #include <cstddef>

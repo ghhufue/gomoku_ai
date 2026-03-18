@@ -1,5 +1,5 @@
 #include "../direction_encoding.h"
-#include "../state_value.h"
+#include "../StateValueRegistry.h"
 #include "../utils/direction_pattern_lookup.h"
 
 #include <cctype>

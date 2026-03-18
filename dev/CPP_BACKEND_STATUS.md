@@ -6,7 +6,7 @@ Move the hot board-analysis path from Python into a C++ extension and wire it ba
 
 ## Completed
 
-- Added C++ source at [cpp/gomoku_core.cpp](/d:/code/gomoku_ai/cpp/gomoku_core.cpp)
+- Added C++ source at [cpp/RewardEvaluator.cpp](/d:/code/gomoku_ai/cpp/RewardEvaluator.cpp)
 - Added Python wrapper at [gomoku_ai/cpp_backend.py](/d:/code/gomoku_ai/gomoku_ai/cpp_backend.py)
 - Added local build entrypoint at [setup.py](/d:/code/gomoku_ai/setup.py)
 - Integrated the backend into [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) with Python fallback

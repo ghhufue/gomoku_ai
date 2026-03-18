@@ -1,4 +1,4 @@
-#include "state_value.h"
+#include "StateValueRegistry.h"
 
 namespace gomoku {
 

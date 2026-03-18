@@ -3,12 +3,11 @@ from __future__ import annotations
 import numpy as np
 
 from bots.base import Bot
+from gomoku_ai.cpp_backend import score_reward_candidates
 from gomoku_ai.env import (
     BOARD_SIZE,
     EMPTY,
-    action_to_coord,
     coord_to_action,
-    evaluate_reward,
 )
 
 
@@ -39,9 +38,11 @@ class RewardDrivenBot(Bot):
         self,
         candidate_radius: int = 2,
         top_k: int = 1,
+        thread_batch_size: int = 10,
     ):
         self.candidate_radius = max(1, int(candidate_radius))
         self.top_k = max(1, int(top_k))
+        self.thread_batch_size = max(1, int(thread_batch_size))
 
     def next_action(self, board: np.ndarray, player: int, rng: np.random.Generator) -> int:
         candidates = neighboring_actions_with_radius(board, radius=self.candidate_radius)
@@ -49,12 +50,15 @@ class RewardDrivenBot(Bot):
             empties = np.flatnonzero(board.reshape(-1) == EMPTY)
             return int(rng.choice(empties))
 
-        scored_actions: list[tuple[float, int]] = []
-
-        for action in candidates:
-            row, col = action_to_coord(action)
-            reward, _ = evaluate_reward(board, row, col, player)
-            scored_actions.append((float(reward), int(action)))
+        scored_actions = [
+            (float(item["reward"]), int(item["action"]))
+            for item in score_reward_candidates(
+                board,
+                candidates,
+                player,
+                thread_batch_size=self.thread_batch_size,
+            )
+        ]
 
         scored_actions.sort(key=lambda item: item[0], reverse=True)
         top_actions = scored_actions[: min(self.top_k, len(scored_actions))]

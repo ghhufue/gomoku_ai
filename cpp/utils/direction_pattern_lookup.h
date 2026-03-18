@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../direction_encoding.h"
-#include "../state_value.h"
+#include "../StateValueRegistry.h"
 
 #include <array>
 

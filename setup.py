@@ -44,12 +44,13 @@ ext_modules = [
     Extension(
         "gomoku_ai._cpp_backend",
         [
-            str(ROOT / "cpp" / "gomoku_core.cpp"),
-            str(ROOT / "cpp" / "reward_config.cpp"),
-            str(ROOT / "cpp" / "state_value.cpp"),
+            str(ROOT / "cpp" / "RewardEvaluator.cpp"),
+            str(ROOT / "cpp" / "GameStateStore.cpp"),
+            str(ROOT / "cpp" / "RewardConfigStore.cpp"),
+            str(ROOT / "cpp" / "StateValueRegistry.cpp"),
             str(ROOT / "cpp" / "direction_encoding.cpp"),
             str(ROOT / "cpp" / "utils" / "direction_pattern_lookup.cpp"),
-            str(ROOT / "cpp" / "precompute" / "direction_delta_table.cpp"),
+            str(ROOT / "cpp" / "precompute" / "DirectionDeltaTable.cpp"),
         ],
         include_dirs=[pybind11.get_include()],
         language="c++",

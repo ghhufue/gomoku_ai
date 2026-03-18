@@ -1,4 +1,4 @@
-#include "reward_config.h"
+#include "RewardConfigStore.h"
 
 #include <algorithm>
 #include <cctype>

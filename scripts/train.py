@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import GomokuEnv, VectorEnv
+from gomoku_ai.env import SubprocVectorEnv
 from gomoku_ai.model import (
     MODEL_PRESETS,
     ActorCriticNet,
@@ -23,7 +23,6 @@ from gomoku_ai.model import (
 )
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 from gomoku_ai.run_registry import update_registry
-from bots import create_bot
 from scripts.evaluate import evaluate_across_seeds
 
 
@@ -267,6 +266,9 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
         "lr={lr} show_progress={show_progress}".format(**training)
     )
     print(
+        "env_backend: workers={worker_processes} envs_per_worker={envs_per_worker}".format(**training)
+    )
+    print(
         "evaluation: eval_every={eval_every} eval_games={eval_games} eval_seeds={eval_seeds}".format(**evaluation)
     )
     print(
@@ -384,6 +386,8 @@ def main() -> None:
                 if args.show_progress is not None
                 else bool(training.get("show_progress", True))
             ),
+            "worker_processes": 8,
+            "envs_per_worker": 2,
         },
         "model": {"preset": model_preset, **model_config.to_dict()},
         "evaluation": {
@@ -418,19 +422,24 @@ def main() -> None:
     torch.manual_seed(config["runtime"]["seed"])
     device = resolve_device(config["runtime"]["device"])
     config["runtime"]["device"] = device
+    config["training"]["n_envs"] = (
+        config["training"]["worker_processes"] * config["training"]["envs_per_worker"]
+    )
     layout = resolve_run_layout(config)
     print_training_strategy(config, layout)
 
-    opponent = create_bot(
-        name=config["opponent"]["bot_name"],
-        difficulty=(config["opponent"]["bot_difficulty"] or None),
-    )
-    env = VectorEnv(
-        GomokuEnv(
-            opponent=opponent,
-            seed=config["runtime"]["seed"] + idx,
-        )
+    env_specs = [
+        {
+            "seed": config["runtime"]["seed"] + idx,
+            "bot_name": config["opponent"]["bot_name"],
+            "bot_difficulty": config["opponent"]["bot_difficulty"],
+        }
         for idx in range(config["training"]["n_envs"])
+    ]
+    env = SubprocVectorEnv(
+        env_specs=env_specs,
+        num_workers=config["training"]["worker_processes"],
+        envs_per_worker=config["training"]["envs_per_worker"],
     )
     model = ActorCriticNet(model_config)
     ppo_config = PPOConfig(

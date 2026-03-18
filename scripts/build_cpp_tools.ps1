@@ -13,10 +13,10 @@ if (-not (Test-Path $vsDevCmd)) {
 
 $sources = @(
     (Join-Path $root "cpp\direction_encoding.cpp"),
-    (Join-Path $root "cpp\state_value.cpp"),
-    (Join-Path $root "cpp\reward_config.cpp"),
+    (Join-Path $root "cpp\StateValueRegistry.cpp"),
+    (Join-Path $root "cpp\RewardConfigStore.cpp"),
     (Join-Path $root "cpp\utils\direction_pattern_lookup.cpp"),
-    (Join-Path $root "cpp\precompute\direction_delta_table.cpp")
+    (Join-Path $root "cpp\precompute\DirectionDeltaTable.cpp")
 )
 
 function Invoke-ClBuild {

@@ -251,7 +251,7 @@ Required event tracking:
 - Similar shape-transition bookkeeping must be handled in a fine-grained way
 
 Implementation constraints:
-- First modify the C++ backend in [cpp/gomoku_core.cpp](/d:/code/gomoku_ai/cpp/gomoku_core.cpp)
+- First modify the C++ backend in [cpp/RewardEvaluator.cpp](/d:/code/gomoku_ai/cpp/RewardEvaluator.cpp)
 - Do not immediately delete `threat_summary`
 - Implement the new event-driven method separately first
 - Put the validation/comparison utility under `utils/`
@@ -276,8 +276,8 @@ Recommended execution order for the next AI:
 
 Completed:
 - Added a dedicated reward-event registry in C++:
-  - [cpp/reward_events.h](/d:/code/gomoku_ai/cpp/reward_events.h)
-  - [cpp/reward_events.cpp](/d:/code/gomoku_ai/cpp/reward_events.cpp)
+  - [cpp/StateValueRegistry.h](/d:/code/gomoku_ai/cpp/StateValueRegistry.h)
+  - [cpp/StateValueRegistry.cpp](/d:/code/gomoku_ai/cpp/StateValueRegistry.cpp)
 - `RewardEventId` is now narrowed to the intended three families:
   - `create`
   - `block`
@@ -320,7 +320,7 @@ Completed:
 Not done yet:
 - The actual C++ reward algorithm is still not implemented.
 - The lookup table contents are still not populated with real shape/event results.
-- `gomoku_core.cpp` still does not expose the final compact reward entrypoint described in [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md):
+- `RewardEvaluator.cpp` still does not expose the final compact reward entrypoint described in [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md):
   - `reward`
   - `offense_score`
   - `defense_score`

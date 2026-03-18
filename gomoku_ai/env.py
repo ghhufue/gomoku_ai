@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import multiprocessing as mp
 from typing import Iterable
 
 import numpy as np
 
-from gomoku_ai.cpp_backend import BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE, evaluate_reward as cpp_evaluate_reward
+from gomoku_ai.cpp_backend import (
+    BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE,
+    apply_env_move as cpp_apply_env_move,
+    clear_env_state as cpp_clear_env_state,
+    env_done as cpp_env_done,
+    env_winner as cpp_env_winner,
+    evaluate_env_reward as cpp_evaluate_env_reward,
+    evaluate_reward as cpp_evaluate_reward,
+    reset_env_state as cpp_reset_env_state,
+)
 
 
 BOARD_SIZE = 15
@@ -245,12 +255,23 @@ def evaluate_reward(board_before: np.ndarray, row: int, col: int, player: int) -
 class GomokuEnv:
     """Single-agent environment where the agent plays against a built-in opponent."""
 
+    _next_env_id = 0
+
     def __init__(self, opponent, seed: int | None = None):
         self.opponent = opponent
         self.rng = np.random.default_rng(seed)
         self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
         self.agent_player = BLACK
         self.done = False
+        self.env_id = GomokuEnv._next_env_id
+        GomokuEnv._next_env_id += 1
+
+    def __del__(self):
+        if CPP_BACKEND_AVAILABLE:
+            try:
+                cpp_clear_env_state(self.env_id)
+            except Exception:
+                pass
 
     def reset(self) -> tuple[np.ndarray, np.ndarray]:
         self.board.fill(EMPTY)
@@ -261,6 +282,9 @@ class GomokuEnv:
             opening = call_bot_action(self.opponent, self.board.copy(), BLACK, self.rng)
             row, col = action_to_coord(opening)
             self.board[row, col] = BLACK
+
+        if CPP_BACKEND_AVAILABLE:
+            cpp_reset_env_state(self.env_id, self.board)
 
         return self.observation(), self.action_mask()
 
@@ -278,6 +302,8 @@ class GomokuEnv:
     def step(self, action: int) -> StepResult:
         if self.done:
             raise RuntimeError("Environment is done. Call reset() before step().")
+        if CPP_BACKEND_AVAILABLE:
+            cpp_reset_env_state(self.env_id, self.board)
 
         row, col = action_to_coord(action)
         if not inside(row, col) or self.board[row, col] != EMPTY:
@@ -290,21 +316,21 @@ class GomokuEnv:
                 {"illegal_move": True, "agent_result": "loss"},
             )
 
-        before = self.board.copy()
+        reward_payload = cpp_evaluate_env_reward(self.env_id, row, col, self.agent_player)
+        reward = float(reward_payload["reward"])
+        info = reward_payload
         self.board[row, col] = self.agent_player
-        reward, info = evaluate_reward(before, row, col, self.agent_player)
+        cpp_apply_env_move(self.env_id, row, col, self.agent_player)
 
-        mine = classify_move(self.board, row, col, self.agent_player)
-        if mine["five"]:
+        if cpp_env_done(self.env_id):
             self.done = True
-            info["winner"] = self.agent_player
-            info["agent_result"] = "win"
-            return StepResult(self.observation(), self.action_mask(), reward, True, info)
-
-        if not np.any(self.board == EMPTY):
-            self.done = True
-            info["draw"] = True
-            info["agent_result"] = "draw"
+            winner = cpp_env_winner(self.env_id)
+            if winner == self.agent_player:
+                info["winner"] = self.agent_player
+                info["agent_result"] = "win"
+            else:
+                info["draw"] = True
+                info["agent_result"] = "draw"
             return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
         opponent_action = call_bot_action(self.opponent, self.board.copy(), -self.agent_player, self.rng)
@@ -315,26 +341,32 @@ class GomokuEnv:
             opponent_action = fallback
 
         self.board[opp_row, opp_col] = -self.agent_player
+        cpp_apply_env_move(self.env_id, opp_row, opp_col, -self.agent_player)
         opp_patterns = classify_move(self.board, opp_row, opp_col, -self.agent_player)
         info["opponent_action"] = opponent_action
         info["opponent_pattern"] = opp_patterns
-        if opp_patterns["five"]:
+        if cpp_env_done(self.env_id):
             self.done = True
-            info["winner"] = -self.agent_player
-            info["agent_result"] = "loss"
+            winner = cpp_env_winner(self.env_id)
+            if winner == -self.agent_player:
+                info["winner"] = -self.agent_player
+                info["agent_result"] = "loss"
+                return StepResult(
+                    self.observation(),
+                    self.action_mask(),
+                    reward - TERMINAL_REWARD,
+                    True,
+                    info,
+                )
+            info["draw"] = True
+            info["agent_result"] = "draw"
             return StepResult(
                 self.observation(),
                 self.action_mask(),
-                reward - TERMINAL_REWARD,
+                reward,
                 True,
                 info,
             )
-
-        if not np.any(self.board == EMPTY):
-            self.done = True
-            info["draw"] = True
-            info["agent_result"] = "draw"
-            return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
         return StepResult(self.observation(), self.action_mask(), reward, False, info)
 
@@ -345,6 +377,62 @@ def call_bot_action(opponent, board: np.ndarray, player: int, rng: np.random.Gen
     if hasattr(opponent, "select_action"):
         return int(opponent.select_action(board, player, rng))
     raise TypeError("opponent must implement next_action(board, player, rng) or select_action(board, player, rng)")
+
+
+def _subproc_vector_worker(connection, env_specs: list[dict]) -> None:
+    from bots import create_bot
+
+    envs = [
+        GomokuEnv(
+            opponent=create_bot(name=spec["bot_name"], difficulty=(spec["bot_difficulty"] or None)),
+            seed=int(spec["seed"]),
+        )
+        for spec in env_specs
+    ]
+    try:
+        while True:
+            command, payload = connection.recv()
+            if command == "reset":
+                obs, masks = zip(*(env.reset() for env in envs))
+                connection.send((np.stack(obs), np.stack(masks)))
+                continue
+
+            if command == "step":
+                actions = payload
+                next_obs = []
+                next_masks = []
+                rewards = []
+                dones = []
+                infos: list[dict] = []
+                for env, action in zip(envs, actions):
+                    result = env.step(int(action))
+                    obs = result.observation
+                    mask = result.action_mask
+                    if result.done:
+                        obs, mask = env.reset()
+                    next_obs.append(obs)
+                    next_masks.append(mask)
+                    rewards.append(result.reward)
+                    dones.append(result.done)
+                    infos.append(result.info)
+
+                connection.send(
+                    (
+                        np.stack(next_obs),
+                        np.stack(next_masks),
+                        np.asarray(rewards, dtype=np.float32),
+                        np.asarray(dones, dtype=np.float32),
+                        infos,
+                    )
+                )
+                continue
+
+            if command == "close":
+                break
+
+            raise ValueError(f"unsupported worker command: {command}")
+    finally:
+        connection.close()
 
 
 class VectorEnv:
@@ -381,3 +469,83 @@ class VectorEnv:
             np.asarray(dones, dtype=np.float32),
             infos,
         )
+
+
+class SubprocVectorEnv:
+    def __init__(self, env_specs: list[dict], num_workers: int = 8, envs_per_worker: int = 2):
+        if num_workers <= 0:
+            raise ValueError("num_workers must be positive")
+        if envs_per_worker <= 0:
+            raise ValueError("envs_per_worker must be positive")
+        if len(env_specs) == 0:
+            raise ValueError("env_specs must not be empty")
+
+        self.ctx = mp.get_context("spawn")
+        self.parents = []
+        self.processes = []
+        self.worker_sizes: list[int] = []
+        self.num_envs = len(env_specs)
+
+        for start in range(0, len(env_specs), envs_per_worker):
+            chunk = env_specs[start : start + envs_per_worker]
+            parent_conn, child_conn = self.ctx.Pipe()
+            process = self.ctx.Process(
+                target=_subproc_vector_worker,
+                args=(child_conn, chunk),
+                daemon=True,
+            )
+            process.start()
+            child_conn.close()
+            self.parents.append(parent_conn)
+            self.processes.append(process)
+            self.worker_sizes.append(len(chunk))
+
+    def reset(self) -> tuple[np.ndarray, np.ndarray]:
+        for parent in self.parents:
+            parent.send(("reset", None))
+        results = [parent.recv() for parent in self.parents]
+        obs = [item[0] for item in results]
+        masks = [item[1] for item in results]
+        return np.concatenate(obs, axis=0), np.concatenate(masks, axis=0)
+
+    def step(self, actions: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+        if len(actions) != self.num_envs:
+            raise ValueError(f"expected {self.num_envs} actions, got {len(actions)}")
+
+        offset = 0
+        for parent, worker_size in zip(self.parents, self.worker_sizes):
+            parent.send(("step", actions[offset : offset + worker_size].tolist()))
+            offset += worker_size
+
+        results = [parent.recv() for parent in self.parents]
+        next_obs = np.concatenate([item[0] for item in results], axis=0)
+        next_masks = np.concatenate([item[1] for item in results], axis=0)
+        rewards = np.concatenate([item[2] for item in results], axis=0)
+        dones = np.concatenate([item[3] for item in results], axis=0)
+        infos: list[dict] = []
+        for item in results:
+            infos.extend(item[4])
+        return next_obs, next_masks, rewards, dones, infos
+
+    def close(self) -> None:
+        for parent in self.parents:
+            try:
+                parent.send(("close", None))
+            except (BrokenPipeError, EOFError):
+                pass
+        for parent in self.parents:
+            try:
+                parent.close()
+            except OSError:
+                pass
+        for process in self.processes:
+            process.join(timeout=1.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

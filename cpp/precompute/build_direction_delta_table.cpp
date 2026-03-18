@@ -1,7 +1,7 @@
 #include "../direction_encoding.h"
-#include "../state_value.h"
+#include "../StateValueRegistry.h"
 #include "../utils/direction_pattern_lookup.h"
-#include "direction_delta_table.h"
+#include "DirectionDeltaTable.h"
 
 #include <array>
 #include <cstdint>
