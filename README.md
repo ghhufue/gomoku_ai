@@ -261,3 +261,5 @@ gmkt test --case-id 16
 - 如果要快速了解当前工程状态，优先看：
   - [dev/PROJECT_STATUS.md](/d:/code/gomoku_ai/dev/PROJECT_STATUS.md)
   - [dev/COMMON_COMMANDS.md](/d:/code/gomoku_ai/dev/COMMON_COMMANDS.md)
+
+## Reading
