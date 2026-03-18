@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from gomoku_ai.cpp_backend import BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE, decode_reward_events
 from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, WHITE, evaluate_reward
 from utils.board_printer import print_board
 
@@ -123,10 +124,6 @@ def load_record(path: Path, game_index: int = 1) -> LoadedRecord:
             "offense_score": float(info.get("offense_score", 0.0)),
             "defense_score": float(info.get("defense_score", 0.0)),
         }
-        special_rewards = info.get("special_rewards")
-        if isinstance(special_rewards, dict):
-            for key, value in special_rewards.items():
-                reward_components[str(key)] = float(value)
         steps.append(
             ReplayStep(
                 index=index,
@@ -186,8 +183,24 @@ def render_step(record: LoadedRecord, cursor: int) -> None:
     for key, value in step.info.get("special_rewards", {}).items():
         print(f"  - {key}: {float(value):.2f}")
     print("[events]")
-    for event in step.info.get("events", []):
-        print(f"  - {event}")
+    raw_events = step.info.get("events", [])
+    if CPP_BACKEND_AVAILABLE:
+        try:
+            decoded_events = decode_reward_events(raw_events)
+        except Exception:
+            decoded_events = []
+    else:
+        decoded_events = []
+    if decoded_events:
+        for event in decoded_events:
+            print(
+                "  - "
+                f"{event['side']} {event['state_name']} x{int(event['count'])} "
+                f"(event_id={int(event['event_id'])})"
+            )
+    else:
+        for event in raw_events:
+            print(f"  - {event}")
     print()
     print("←/→ 切换步数，A/D 也可，Q 退出。")
 

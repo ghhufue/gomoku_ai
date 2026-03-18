@@ -82,6 +82,7 @@ private:
 };
 
 pybind11::list list_state_values();
+pybind11::list decode_reward_events(pybind11::iterable events_obj);
 pybind11::dict debug_encode_direction_side_states(pybind11::iterable states_obj);
 pybind11::dict debug_decode_direction_lookup_key(std::uint32_t lookup_key);
 pybind11::list debug_classify_direction_side_states(pybind11::iterable states_obj);

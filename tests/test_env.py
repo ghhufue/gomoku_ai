@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from bots import create_bot
+from gomoku_ai.cpp_backend import decode_reward_events
 from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, GomokuEnv, classify_move, classify_move_counts, coord_to_action, evaluate_reward
 
 
@@ -57,6 +58,17 @@ def test_evaluate_reward_uses_cpp_backend() -> None:
     assert "defense_score" in info
     assert "special_rewards" in info
     assert "events" in info
+
+
+def test_decode_reward_events_returns_readable_names() -> None:
+    decoded = decode_reward_events([(272, 2), (100528, -1)])
+
+    assert decoded[0]["side"] == "self"
+    assert decoded[0]["state_name"] == "live_one"
+    assert decoded[0]["count"] == 2
+    assert decoded[1]["side"] == "opponent"
+    assert decoded[1]["state_name"] == "live_two"
+    assert decoded[1]["count"] == -1
 
 
 def test_env_illegal_move_ends_episode() -> None:

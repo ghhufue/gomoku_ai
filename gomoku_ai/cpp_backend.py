@@ -117,6 +117,14 @@ def list_state_values():
     return list(_backend.list_state_values())
 
 
+def decode_reward_events(events):
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    if not hasattr(_backend, "decode_reward_events"):
+        raise RuntimeError("decode_reward_events is not exposed by the C++ backend")
+    return list(_backend.decode_reward_events(events))
+
+
 def debug_encode_direction_side_states(states):
     if _backend is None:
         raise RuntimeError("C++ backend is not available")

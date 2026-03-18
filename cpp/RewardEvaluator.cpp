@@ -470,6 +470,32 @@ py::list list_state_values() {
     return payload;
 }
 
+py::list decode_reward_events(py::iterable events_obj) {
+    py::list payload;
+    for (py::handle item : events_obj) {
+        const py::tuple event = py::cast<py::tuple>(item);
+        if (event.size() != 2) {
+            throw py::value_error("each reward event must be a pair: (event_id, count)");
+        }
+
+        const int raw_event_id = py::cast<int>(event[0]);
+        const int count = py::cast<int>(event[1]);
+        const bool is_opponent = raw_event_id >= kOpponentEventOffset;
+        const int state_id_value = is_opponent ? raw_event_id - kOpponentEventOffset : raw_event_id;
+        const StateValueId state_id = static_cast<StateValueId>(state_id_value);
+
+        py::dict decoded;
+        decoded["event_id"] = raw_event_id;
+        decoded["count"] = count;
+        decoded["side"] = is_opponent ? "opponent" : "self";
+        decoded["state_id"] = state_id_value;
+        decoded["state_name"] = py::str(state_value_name(state_id));
+        decoded["state_description"] = py::str(state_value_description(state_id));
+        payload.append(decoded);
+    }
+    return payload;
+}
+
 py::dict debug_encode_direction_side_states(py::iterable states_obj) {
     std::array<RelativeCellState, kDirectionSideCount> states{};
     int index = 0;
@@ -806,6 +832,7 @@ PYBIND11_MODULE(_cpp_backend, module) {
     module.def("env_done", &gomoku::env_done, py::arg("env_id"));
     module.def("env_winner", &gomoku::env_winner, py::arg("env_id"));
     module.def("list_state_values", &gomoku::list_state_values);
+    module.def("decode_reward_events", &gomoku::decode_reward_events, py::arg("events"));
     module.def("debug_encode_direction_side_states", &gomoku::debug_encode_direction_side_states, py::arg("states"));
     module.def("debug_decode_direction_lookup_key", &gomoku::debug_decode_direction_lookup_key, py::arg("lookup_key"));
     module.def("debug_classify_direction_side_states", &gomoku::debug_classify_direction_side_states, py::arg("states"));
