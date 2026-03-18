@@ -123,6 +123,10 @@ def load_record(path: Path, game_index: int = 1) -> LoadedRecord:
             "offense_score": float(info.get("offense_score", 0.0)),
             "defense_score": float(info.get("defense_score", 0.0)),
         }
+        special_rewards = info.get("special_rewards")
+        if isinstance(special_rewards, dict):
+            for key, value in special_rewards.items():
+                reward_components[str(key)] = float(value)
         steps.append(
             ReplayStep(
                 index=index,
@@ -178,9 +182,9 @@ def render_step(record: LoadedRecord, cursor: int) -> None:
     print("[reward_components]")
     for key, value in step.reward_components.items():
         print(f"  - {key}: {value:.2f}")
-    print("[event_deltas]")
-    print(f"  - offense: {step.info.get('event_deltas', {}).get('offense_delta')}")
-    print(f"  - defense: {step.info.get('event_deltas', {}).get('defense_delta')}")
+    print("[special_rewards]")
+    for key, value in step.info.get("special_rewards", {}).items():
+        print(f"  - {key}: {float(value):.2f}")
     print("[events]")
     for event in step.info.get("events", []):
         print(f"  - {event}")

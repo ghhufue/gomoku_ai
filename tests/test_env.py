@@ -55,6 +55,7 @@ def test_evaluate_reward_uses_cpp_backend() -> None:
     assert info["reward"] == reward
     assert "offense_score" in info
     assert "defense_score" in info
+    assert "special_rewards" in info
     assert "events" in info
 
 
