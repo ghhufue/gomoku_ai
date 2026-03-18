@@ -376,7 +376,7 @@ def make_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--device", type=str, default="auto", help="Device: auto/cpu/cuda.")
     evaluate_parser.add_argument("--seed", type=int, default=123, help="Base seed.")
     evaluate_parser.add_argument("--num-seeds", type=int, default=1, help="Number of seeds to aggregate.")
-    evaluate_parser.add_argument("--bot", type=str, default="reward_driven_hard", help="Opponent bot name from configs/bots.toml.")
+    evaluate_parser.add_argument("--bot", type=str, default="rule", help="Opponent bot name from configs/bots.toml.")
     evaluate_parser.add_argument("--bot-difficulty", type=str, default=None, help="Opponent difficulty from configs/bots.toml.")
     evaluate_parser.add_argument("--output-dir", type=Path, default=Path("outputs/evaluation"), help="Export directory.")
     evaluate_parser.add_argument("--filename", type=str, default="match_record", help="Export filename stem.")
