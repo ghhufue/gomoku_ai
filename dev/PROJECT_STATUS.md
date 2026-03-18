@@ -1,42 +1,105 @@
-# 项目进度记录
+# 项目状态记录
 
-## 项目目标
+更新时间：`2026-03-18`
 
-这个仓库当前的目标不是直接做出最强五子棋 AI，而是把基于 PPO 的训练闭环稳定下来，并为后续迭代保留可分析、可扩展的工程结构。
+## 当前目标
 
-当前主线目标：
+这个仓库仍然是一个面向 PPO 教学和工程演化的五子棋项目，而不是追求最强棋力的最终版本。当前主线目标是：
 
-1. 环境逻辑正确
-2. 奖励设计可训练
-3. PPO 训练流程可持续运行
-4. run / checkpoint / 评估 / 历史数据链路完整
-5. 模型结构、配置和工具链便于后续继续迭代
+1. 保持训练闭环可运行。
+2. 让训练、评估、回放、run 管理和 profiling 数据链路完整。
+3. 持续把热点棋盘分析逻辑下沉到 C++。
+4. 把 reward 逻辑从旧的 threat-summary 思路进一步收敛到更稳定的 C++ 事件/状态增量路径。
 
-当前阶段仍然是 Python-first 原型，不是最终高性能版本。
+## 当前实现快照
 
-## 当前已实现
-
-### 环境与规则
+### 环境与对局
 
 核心文件：
 
 - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
-- [bots/reward_driven_bot.py](/d:/code/gomoku_ai/bots/reward_driven_bot.py)
+- [bots/factory.py](/d:/code/gomoku_ai/bots/factory.py)
+- [configs/bots.toml](/d:/code/gomoku_ai/configs/bots.toml)
 
-已实现：
+当前已实现：
 
-- `15x15` 五子棋环境
-- 单智能体对战内置 Bot
-- 合法动作掩码
-- 非法落子直接判负
-- 五连、活四、冲四、活三、眠三、活二等棋形识别
-- 基于落子前后 threat 变化的 reward 计算
-- `VectorEnv` 批量采样接口
+- `15x15` 五子棋环境。
+- 单智能体对内置 Bot 对战。
+- 非法落子直接判负。
+- 随机先后手；若智能体执白，环境会先执行 Bot 开局一步。
+- 观测为 `3 x 15 x 15`：
+  - 当前玩家棋子
+  - 对手棋子
+  - 空位
+- 动作掩码为 `225` 维合法落子布尔数组。
+- 同时提供：
+  - `VectorEnv`
+  - `SubprocVectorEnv`
 
-说明：
+当前内置对手：
 
-- 训练环境目前仍是单进程串行 step，不是真正并行
-- 当前训练瓶颈主要还是环境与 reward 计算
+- `random`
+- `classic_rule`
+- `reward_driven_medium`
+- `reward_driven_hard`
+
+难度映射来自 [configs/bots.toml](/d:/code/gomoku_ai/configs/bots.toml)：
+
+- `easy -> random`
+- `medium -> classic_rule`
+- `hard -> reward_driven_hard`
+
+### Reward 与 C++ backend
+
+核心文件：
+
+- [cpp/RewardEvaluator.cpp](/d:/code/gomoku_ai/cpp/RewardEvaluator.cpp)
+- [cpp/GameStateStore.cpp](/d:/code/gomoku_ai/cpp/GameStateStore.cpp)
+- [cpp/RewardConfigStore.cpp](/d:/code/gomoku_ai/cpp/RewardConfigStore.cpp)
+- [gomoku_ai/cpp_backend.py](/d:/code/gomoku_ai/gomoku_ai/cpp_backend.py)
+
+当前真实状态：
+
+- 环境 step 的 reward 主路径已经走 C++，不是旧文档里的 Python reward 主算路。
+- `GomokuEnv.step()` 会调用 `cpp_evaluate_env_reward(...)`，并配合 `GameStateStore` 维护每个 env 的棋盘与计数缓存。
+- C++ 当前对 Python 暴露的核心能力包括：
+  - `evaluate_reward`
+  - `evaluate_env_reward`
+  - `score_classic_candidates`
+  - `score_reward_candidates`
+  - `reset_env_state / apply_env_move / env_done / env_winner`
+  - 若干 debug / decode 接口
+- 当前 reward 返回给 Python 的主字段已经包括：
+  - `reward`
+  - `offense_score`
+  - `defense_score`
+  - `events`
+  - `special_rewards`
+
+这意味着 [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md) 里的“目标接口”已经部分落地，但还没有完全收敛到“只返回最小 4 字段”的最终形式，因为目前仍附带 `special_rewards` 调试信息。
+
+### 方向编码与状态值表
+
+核心文件：
+
+- [cpp/direction_encoding.cpp](/d:/code/gomoku_ai/cpp/direction_encoding.cpp)
+- [cpp/utils/direction_pattern_lookup.cpp](/d:/code/gomoku_ai/cpp/utils/direction_pattern_lookup.cpp)
+- [cpp/StateValueRegistry.cpp](/d:/code/gomoku_ai/cpp/StateValueRegistry.cpp)
+- [cpp/precompute/DirectionDeltaTable.cpp](/d:/code/gomoku_ai/cpp/precompute/DirectionDeltaTable.cpp)
+
+当前已实现：
+
+- 四个方向的局部侧翼编码。
+- 基于查表的状态增量计算。
+- 追踪状态值的注册表与描述信息。
+- reward event 的 decode/debug 接口。
+
+当前未完成：
+
+- 还没有把 reward 进一步压缩成纯净、稳定、不带附加调试字段的最终公共接口。
+- 旧文档中提到的“event-driven reward 完整替代旧路径”还没有完全结束；现在更准确的说法是：
+  - C++ 已经在做状态增量驱动的 reward 计算；
+  - 但接口清理、配置所有权收敛、周边工具适配仍在进行中。
 
 ### 模型与 PPO
 
@@ -46,333 +109,142 @@
 - [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml)
 - [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py)
 
-已实现：
+当前已实现：
 
-- Residual Actor-Critic 网络
-- 策略头输出 `225` 维动作 logits
-- 价值头输出标量 `V(s)`
-- masked categorical 动作分布
-- 同步 PPO 更新
-- GAE 优势估计
-- TensorBoard 指标记录
-- rollout / optimize / fps 统计
+- Residual Actor-Critic 网络。
+- `225` 维策略输出。
+- 标量 value head。
+- masked categorical 动作分布。
+- PPO + GAE 训练。
+- checkpoint 中保存模型结构元数据；恢复时支持从 checkpoint 反推模型配置。
 
-模型配置能力：
+当前模型预设以 [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml) 为准：
 
-- 模型代码已迁移到 `gomoku_ai/model/` 包
-- 预设模型放在 [gomoku_ai/model/presets.toml](/d:/code/gomoku_ai/gomoku_ai/model/presets.toml)
-- 支持 `small / base / large / custom`
-- `custom` 时才读取 TOML 里的显式模型参数
-- checkpoint 可保存并恢复模型结构
-- 旧 checkpoint 无结构元数据时可从 `state_dict` 推断
+- `small`: `48 channels / 3 blocks`
+- `base`: `64 channels / 4 blocks`
+- `large`: `128 channels / 10 blocks`
+- `custom`: 从训练参数显式覆盖
 
-### 训练与评估
+### 训练、评估与 run 管理
 
 核心文件：
 
 - [scripts/train.py](/d:/code/gomoku_ai/scripts/train.py)
 - [scripts/evaluate.py](/d:/code/gomoku_ai/scripts/evaluate.py)
+- [scripts/profile_env.py](/d:/code/gomoku_ai/scripts/profile_env.py)
+- [scripts/list_runs.py](/d:/code/gomoku_ai/scripts/list_runs.py)
+- [gomoku_ai/run_registry.py](/d:/code/gomoku_ai/gomoku_ai/run_registry.py)
 
-已实现：
+当前已实现：
 
-- 基于 TOML 的训练配置
-- 命令行覆盖关键超参
-- 启动前打印实际生效的训练策略摘要
-- 多 seed 聚合评估
-- 周期 checkpoint
-- `best_model`
-- `final_model`
-- `resume-from` 恢复训练
+- 基于 TOML 的训练配置。
+- 训练时打印“实际生效策略摘要”。
+- checkpoint / best model / final model / resume。
+- run manifest 和 `runs/index.json`。
+- 每个 run 的 `history/` 持续记录：
+  - `updates.log`
+  - `updates.jsonl`
+  - `updates.csv`
+  - `evals.jsonl`
+  - `training_strategy.json`
+- 支持多 seed 聚合评估。
+- 评估支持：
+  - model vs bot
+  - bot vs bot
+- 评估导出支持：
+  - JSON record
+  - text report
+  - visual JSON
+- 提供环境 benchmark / cProfile / training-profile 三类 profiling。
 
-训练历史记录：
+需要注意的真实实现细节：
 
-- 每个 run 下会写出 `history/`
-- `updates.log`：控制台摘要行
-- `updates.jsonl`：每次 update 的结构化训练数据
-- `updates.csv`：便于表格和脚本分析
-- `evals.jsonl`：每次评估结果
-- `training_strategy.json`：本次 run 的生效配置快照
+- `scripts/train.py` 当前固定把训练环境组织成 `8` 个 worker、每个 worker `2` 个 env，并最终覆盖 `n_envs = 16`。
+- 因此命令行 `--n-envs` 当前不会像旧文档写的那样真正决定最终并行环境数。
+- 当前训练主环境是 [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) 中的 `SubprocVectorEnv`。
 
-### run 管理与工具
+### CLI
 
 核心文件：
 
-- [gomoku_ai/run_registry.py](/d:/code/gomoku_ai/gomoku_ai/run_registry.py)
-- [scripts/list_runs.py](/d:/code/gomoku_ai/scripts/list_runs.py)
 - [tools/cli.py](/d:/code/gomoku_ai/tools/cli.py)
-- [setup_env.ps1](/d:/code/gomoku_ai/setup_env.ps1)
 
-已实现：
+当前 `gmkt` 子命令包括：
 
-- 所有训练产物统一落到 `runs/<run_name>/`
-- 每个 run 自动生成：
-  - `manifest.json`
-  - `latest_eval.json`
-  - `checkpoints/`
-  - `history/`
-  - `tensorboard/`
-  - `final_model.pt`
-- `runs/index.json` 统一维护 run 索引
-- `gmkt` 项目工具入口
-
-当前 CLI 命令包括：
-
+- `help`
 - `cleanup-latest-run`
 - `cleanup-artifacts`
-- `evaluate`
 - `test`
 - `reward-table`
+- `evaluate`
+- `replay`
 
-### 配置外置
-
-核心文件：
-
-- [configs/train.toml](/d:/code/gomoku_ai/configs/train.toml)
-- [configs/custom/train_large.toml](/d:/code/gomoku_ai/configs/custom/train_large.toml)
-- [configs/reward.toml](/d:/code/gomoku_ai/configs/reward.toml)
-
-已实现：
-
-- PPO 训练超参外置
-- 评估策略外置
-- checkpoint 策略外置
-- run 产物目录策略外置
-- reward 参数外置
-- 模型 preset 与 custom 参数外置
+## 当前验证状态
 
 ### 测试
 
-核心目录：
+`2026-03-18` 在本地执行：
 
-- [tests](/d:/code/gomoku_ai/tests)
+```powershell
+python -m pytest -q
+```
 
-当前已覆盖：
+结果不是全绿，而是：
 
-- 环境与棋形识别
-- CLI evaluate 参数
-- evaluate 导出格式
-- replay record 兼容性
-- run layout
-- 模型配置推断与 checkpoint 兼容
-- cleanup-artifacts 行为
+- `34 passed`
+- `4 failed`
 
-说明：
+当前失败项：
 
-- 仓库内已有 `pytest` 测试文件
-- 但本地当前会话环境未必已经安装 `pytest` / `tensorboard`
+1. [tests/test_cli_evaluate.py](/d:/code/gomoku_ai/tests/test_cli_evaluate.py)
+   现有实现默认 bot 是 `reward_driven_hard`，测试仍在断言旧值 `rule`。
+2. [tests/test_evaluate_exports.py](/d:/code/gomoku_ai/tests/test_evaluate_exports.py)
+   `export_match_outputs()` 签名已经调整，测试仍按旧接口传 `checkpoint_path` 和 `device`。
+3. [tests/test_model_config.py](/d:/code/gomoku_ai/tests/test_model_config.py)
+   测试断言 `large.blocks == 8`，但当前预设文件实际是 `10`。
+4. [tests/test_model_config.py](/d:/code/gomoku_ai/tests/test_model_config.py)
+   同一处旧断言导致 `build_model_config(...)` 相关 case 也失败。
 
-## 当前训练现状
+结论：
 
-目前模型可以稳定学会击败 `random` bot，但对 `rule` bot 仍然偏弱。
+- 代码主线已经演化；
+- 测试里还有一部分旧假设没有同步；
+- 当前状态不应再写成“测试全部通过”。
 
-当前观察：
-
-- 大模型配置已能正确生效，不再误回落到小模型
-- 训练日志和历史数据已经足够支持离线分析
-- 一些 run 会出现对 `random` 胜率高、对 `rule` 胜率长期为 `0` 的情况
-
-这说明当前主要问题不是“模型根本不会下棋”，而是：
-
-- 训练时长不够
-- 对手分布偏强
-- reward 虽然能学到基础落子，但还不足以稳定学出对抗 rule bot 的策略
-
-## 已知瓶颈
+## 已知问题与风险
 
 ### 高优先级
 
-1. 训练质量分析不足自动化
-
-- 现在 history 已经落盘，但还缺少专门的分析脚本
-- 需要更系统地对 `win_rate / entropy / value_loss / reward components` 做回顾
-
-2. 训练对手过于单一
-
-- 当前主要仍围绕 rule bot
-- 建议后续增加 curriculum 或混合对手
-
-3. 环境吞吐仍偏低
-
-- rollout 时间显著高于 optimize 时间
-- 当前瓶颈主要仍在环境与规则逻辑，而不是网络反向传播
+1. 测试基线与当前实现不同步。
+2. reward 接口还没有完全收敛到最终极简契约。
+3. `scripts/train.py` 中 `--n-envs` 的实际语义与文档直觉不一致，容易误导使用者。
 
 ### 中优先级
 
-4. 更丰富的评估基线
-
-- 当前主要评估对象是 `rule` 和 `random`
-- 还缺中间难度对手
-
-5. 训练监控继续增强
-
-- 当前已经有 history
-- 后续可增加更多统计摘要和自动诊断
+4. profiling 脚本仍主要使用 `VectorEnv`，与训练默认使用的 `SubprocVectorEnv` 不完全一致。
+5. 评估、回放、reward 可视化等周边工具已经能用，但部分文档仍沿用旧 bot 命名和旧 reward 叙述。
 
 ### 低优先级
 
-6. C++ 下沉更多环境热路径
+6. 旧的 Python 参考函数仍保留在 [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) 中，容易让新接手者误判主路径。
 
-- 现有 C++ backend 已存在
-- 但是否继续下沉，最好先基于 profiling 再做决定
+## 建议的下一步
 
-## 当前建议的下一步
+如果现在继续维护这个仓库，优先顺序建议是：
 
-如果新的 AI 接手，这一轮最值得优先做的是：
+1. 先把失败测试修到与当前实现一致，恢复 CI/本地回归基线。
+2. 明确 `train.py` 中并行环境参数的真实配置来源，决定是暴露可配还是固定写死。
+3. 把 reward 对外接口收敛到最终契约，评估是否移除默认返回中的 `special_rewards`。
+4. 再决定是否继续推进更深层的 C++ 下沉或 reward 事件精化。
 
-1. 基于 `runs/<run>/history/` 做训练结果分析脚本
-2. 对比 `small / base / large / custom` 的实际学习效率
-3. 引入混合对手或 curriculum 训练
-4. 再决定 reward 调整还是环境性能优化优先
-
-不建议直接跳到：
-
-- 全量 C++ 重写环境
-- 直接引入 MCTS
-- 在训练主链路里加入复杂搜索
-
-## Reward Refactor Task
-
-Current reward is still based on threat-summary deltas. The next major task is to refactor it toward an event-driven reward system while keeping the old path as a validation baseline.
-
-Target direction:
-- Reward should be split into two parts:
-  - offense: new shapes created for the current player by the placed stone
-  - defense: opponent shapes broken or weakened by the placed stone
-- Calculation should start from the placed move and scan the four directions only
-- Reward should be driven by local state changes instead of global threat-summary differences
-
-Required event tracking:
-- Detect shape creation, destruction, upgrade, downgrade, and conversion
-- Example transitions that must be tracked:
-  - creating a live three
-  - after opponent defense, my live three becomes `-1` and sleep/dead three becomes `+1`
-  - when a rush four is formed, previous dead/sleep three count should decrease and dead/rush four count should increase
-  - a live two can become a sleep/dead three after colliding with stones or being blocked
-- Similar shape-transition bookkeeping must be handled in a fine-grained way
-
-Implementation constraints:
-- First modify the C++ backend in [cpp/RewardEvaluator.cpp](/d:/code/gomoku_ai/cpp/RewardEvaluator.cpp)
-- Do not immediately delete `threat_summary`
-- Implement the new event-driven method separately first
-- Put the validation/comparison utility under `utils/`
-
-Validation plan:
-- Build a fixed dataset for comparison, using fixed board records / fixed move sequences
-- For each move, compare:
-  - the variables maintained by the new event-driven tracker
-  - the result implied by the current `threat_summary`-based method
-- Use the old method only as a consistency baseline before replacing the reward path
-
-Recommended execution order for the next AI:
-1. Define the event/state representation for shape transitions
-2. Implement local event extraction in C++
-3. Expose the new path without removing the old one
-4. Build a comparison tool under `utils/`
-5. Create fixed board-sequence test data
-6. Verify whether event-driven state changes are consistent with the existing `threat_summary` baseline
-7. Only after validation, consider replacing the reward main path
-
-### Current Progress Snapshot
-
-Completed:
-- Added a dedicated reward-event registry in C++:
-  - [cpp/StateValueRegistry.h](/d:/code/gomoku_ai/cpp/StateValueRegistry.h)
-  - [cpp/StateValueRegistry.cpp](/d:/code/gomoku_ai/cpp/StateValueRegistry.cpp)
-- `RewardEventId` is now narrowed to the intended three families:
-  - `create`
-  - `block`
-  - `unresolved`
-- Event ids are further refined by shape/variant, including:
-  - live two contiguous / gap1
-  - live three contiguous / gap1 / gap2
-  - sleep three contiguous / gap1 / gap2
-  - live four contiguous / gap1
-  - rush four contiguous / gap1
-- Added a separate directional encoding module:
-  - [cpp/direction_encoding.h](/d:/code/gomoku_ai/cpp/direction_encoding.h)
-  - [cpp/direction_encoding.cpp](/d:/code/gomoku_ai/cpp/direction_encoding.cpp)
-- Direction encoding has been abstracted to clearer C++ types:
-  - `Stone`
-  - `Vec2i`
-  - `Direction`
-  - `DirectionLine`
-- Current directional encoding flow is:
-  1. `extract_direction_line(...)`
-  2. `line_to_side_cells(...)`
-  3. `encode_direction_side_cells(...)`
-- Current encoding assumptions:
-  - `0 = empty`
-  - `1 = self`
-  - `2 = other`
-  - out-of-board cells are normalized to `empty`
-  - center stone is implicit and not encoded into the side-state key
-- Current lookup-key design:
-  - input is a fixed 10-cell side-state array
-  - edge empty cells are trimmed
-  - trimmed sequence is base-3 encoded
-  - final key is bucketed by effective length so shorter effective sequences map to smaller keys
-- Added debug/test plumbing for the encoding layer and event registry:
-  - [tests/test_direction_encoding.py](/d:/code/gomoku_ai/tests/test_direction_encoding.py)
-  - [tests/test_cpp_reward_events.py](/d:/code/gomoku_ai/tests/test_cpp_reward_events.py)
-- Added interface contract doc for the target Python/C++ reward boundary:
-  - [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md)
-
-Not done yet:
-- The actual C++ reward algorithm is still not implemented.
-- The lookup table contents are still not populated with real shape/event results.
-- `RewardEvaluator.cpp` still does not expose the final compact reward entrypoint described in [cpp/REWARD_INTERFACE.md](/d:/code/gomoku_ai/cpp/REWARD_INTERFACE.md):
-  - `reward`
-  - `offense_score`
-  - `defense_score`
-  - `events: [(event_id, count), ...]`
-- `configs/reward.toml` is still not owned/loaded by the C++ side.
-- Python reward logic is still not aligned with the target contract:
-  - [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) still computes reward in Python
-  - existing threat-summary-based reward logic is still active
-  - Python still contains old reward-config interpretation and reward assembly logic
-- Python-side consumers are not fully aligned yet:
-  - env step/info payload still follows the current Python reward path
-  - debug/replay/bot tooling still assumes current Python-side reward structures in several places
-  - tests are still centered on the existing Python reward behavior, not the final compact C++ reward API
-
-Next concrete steps:
-1. Define the integer payload format for lookup-table values.
-2. Implement table build/load logic in C++.
-3. Map directional lookup results to `RewardEventId + count`.
-4. Add the final C++ reward entrypoint returning compact numeric payload only.
-5. Move reward-config ownership into C++.
-6. Simplify [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py) to consume the C++ reward result directly.
-7. Update Python tools/tests to the new compact API after the C++ path is stable.
-
-## 接手建议
+## 建议接手顺序
 
 建议优先阅读：
 
 1. [README.md](/d:/code/gomoku_ai/README.md)
 2. [dev/PROJECT_STATUS.md](/d:/code/gomoku_ai/dev/PROJECT_STATUS.md)
 3. [dev/COMMON_COMMANDS.md](/d:/code/gomoku_ai/dev/COMMON_COMMANDS.md)
-4. [configs/train.toml](/d:/code/gomoku_ai/configs/train.toml)
-5. [gomoku_ai/model/network.py](/d:/code/gomoku_ai/gomoku_ai/model/network.py)
-6. [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
-7. [gomoku_ai/ppo.py](/d:/code/gomoku_ai/gomoku_ai/ppo.py)
-
-建议优先执行：
-
-```powershell
-python -m pytest -q
-```
-
-```powershell
-python scripts/train.py --config configs/train.toml
-```
-
-```powershell
-python scripts/list_runs.py --limit 20
-```
-
-只有在 run 历史和 profiling 结果都比较明确后，再决定下一步做：
-
-- reward 调整
-- 对手策略分层
-- 环境热路径优化
-- C++ 继续下沉
+4. [gomoku_ai/env.py](/d:/code/gomoku_ai/gomoku_ai/env.py)
+5. [cpp/RewardEvaluator.cpp](/d:/code/gomoku_ai/cpp/RewardEvaluator.cpp)
+6. [scripts/train.py](/d:/code/gomoku_ai/scripts/train.py)
+7. [scripts/evaluate.py](/d:/code/gomoku_ai/scripts/evaluate.py)

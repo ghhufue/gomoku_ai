@@ -92,6 +92,36 @@ def empty_actions(board: np.ndarray) -> np.ndarray:
     return np.flatnonzero(board.reshape(-1) == EMPTY)
 
 
+def neighboring_action_mask(
+    board: np.ndarray,
+    radius: int = 2,
+    opening_radius: int = 1,
+) -> np.ndarray:
+    if radius < 0 or opening_radius < 0:
+        raise ValueError("radius and opening_radius must be non-negative")
+
+    empty_mask = board == EMPTY
+    occupied = np.argwhere(board != EMPTY)
+    candidate = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=bool)
+
+    if len(occupied) == 0:
+        center = BOARD_SIZE // 2
+        candidate[center, center] = True
+    else:
+        active_radius = opening_radius if len(occupied) == 1 else radius
+        for row, col in occupied:
+            row_start = max(0, int(row) - active_radius)
+            row_end = min(BOARD_SIZE, int(row) + active_radius + 1)
+            col_start = max(0, int(col) - active_radius)
+            col_end = min(BOARD_SIZE, int(col) + active_radius + 1)
+            candidate[row_start:row_end, col_start:col_end] = True
+
+    candidate &= empty_mask
+    if not candidate.any():
+        candidate = empty_mask.copy()
+    return candidate.reshape(-1)
+
+
 def direction_line(board: np.ndarray, row: int, col: int, dr: int, dc: int, player: int, radius: int = ANALYZE_RADIUS) -> tuple[str, int]:
     chars: list[str] = []
     for offset in range(-radius, radius + 1):
@@ -297,7 +327,7 @@ class GomokuEnv:
         return obs
 
     def action_mask(self) -> np.ndarray:
-        return self.board.reshape(-1) == EMPTY
+        return neighboring_action_mask(self.board, radius=2, opening_radius=1)
 
     def step(self, action: int) -> StepResult:
         if self.done:

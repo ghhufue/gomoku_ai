@@ -33,7 +33,7 @@ class PPOConfig:
     clip_range: float = 0.2
     learning_rate: float = 3e-4
     value_coef: float = 0.5
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.03
     max_grad_norm: float = 0.5
     batch_size: int = 256
     epochs: int = 4
@@ -226,6 +226,7 @@ class PPOTrainer:
         metrics = {
             "policy_loss": 0.0,
             "value_loss": 0.0,
+            "value_loss_weighted": 0.0,
             "entropy": 0.0,
             "approx_kl": 0.0,
             "clip_fraction": 0.0,
@@ -270,6 +271,7 @@ class PPOTrainer:
 
                 metrics["policy_loss"] += float(policy_loss.item())
                 metrics["value_loss"] += float(value_loss.item())
+                metrics["value_loss_weighted"] += float((self.config.value_coef * value_loss).item())
                 metrics["entropy"] += float(entropy_loss.item())
                 metrics["approx_kl"] += float(approx_kl.item())
                 metrics["clip_fraction"] += float(clip_fraction.item())
@@ -320,14 +322,16 @@ class PPOTrainer:
             self.log_stats(update, stats)
             message = (
                 "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.2f} "
-                "wins={wins} losses={losses} draws={draws} value_loss={value_loss:.4f} entropy={entropy:.4f} "
+                "wins={wins} losses={losses} draws={draws} policy_loss={policy_loss:.4f} "
+                "value_loss={value_loss_weighted:.4f} entropy={entropy:.4f} "
                 "rollout={rollout_time_s:.1f}s optimize={optimize_time_s:.1f}s fps={samples_per_sec:.1f}"
             ).format(**stats)
             if self.config.show_progress:
                 tqdm.write(message)
                 iterator.set_postfix(
                     ep_rew=f"{stats['ep_rew_mean']:.1f}",
-                    vloss=f"{stats['value_loss']:.1f}",
+                    ploss=f"{stats['policy_loss']:.1f}",
+                    vloss=f"{stats['value_loss_weighted']:.1f}",
                     fps=f"{stats['samples_per_sec']:.1f}",
                 )
             else:

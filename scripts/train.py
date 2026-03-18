@@ -294,7 +294,8 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
 def format_update_message(stats: dict[str, float]) -> str:
     return (
         "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.2f} "
-        "wins={wins} losses={losses} draws={draws} value_loss={value_loss:.4f} entropy={entropy:.4f} "
+        "wins={wins} losses={losses} draws={draws} policy_loss={policy_loss:.4f} "
+        "value_loss={value_loss_weighted:.4f} entropy={entropy:.4f} "
         "rollout={rollout_time_s:.1f}s optimize={optimize_time_s:.1f}s fps={samples_per_sec:.1f}"
     ).format(**stats)
 
@@ -334,6 +335,7 @@ UPDATE_CSV_FIELDS = [
     "ep_rew_mean",
     "policy_loss",
     "value_loss",
+    "value_loss_weighted",
     "entropy",
     "approx_kl",
     "clip_fraction",

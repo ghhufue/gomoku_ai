@@ -4,7 +4,17 @@ import numpy as np
 
 from bots import create_bot
 from gomoku_ai.cpp_backend import decode_reward_events
-from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, GomokuEnv, classify_move, classify_move_counts, coord_to_action, evaluate_reward
+from gomoku_ai.env import (
+    BLACK,
+    BOARD_SIZE,
+    EMPTY,
+    GomokuEnv,
+    classify_move,
+    classify_move_counts,
+    coord_to_action,
+    evaluate_reward,
+    neighboring_action_mask,
+)
 
 
 class StaticOpponent:
@@ -95,6 +105,32 @@ def test_env_reports_win_before_opponent_turn() -> None:
     assert result.done is True
     assert result.info["agent_result"] == "win"
     assert result.reward > 0.0
+
+
+def test_neighboring_action_mask_limits_single_stone_to_radius_one() -> None:
+    board = empty_board()
+    board[7, 7] = BLACK
+
+    mask = neighboring_action_mask(board, radius=2, opening_radius=1).reshape(BOARD_SIZE, BOARD_SIZE)
+
+    assert mask[6, 6]
+    assert mask[7, 8]
+    assert mask[8, 7]
+    assert not mask[5, 7]
+    assert not mask[7, 9]
+
+
+def test_neighboring_action_mask_uses_radius_two_after_multiple_stones() -> None:
+    board = empty_board()
+    place_many(board, [(7, 7, BLACK), (9, 9, -BLACK)])
+
+    mask = neighboring_action_mask(board, radius=2, opening_radius=1).reshape(BOARD_SIZE, BOARD_SIZE)
+
+    assert mask[5, 7]
+    assert mask[11, 9]
+    assert mask[7, 5]
+    assert not mask[4, 7]
+    assert not mask[12, 9]
 
 
 def test_reward_driven_bot_can_be_constructed() -> None:

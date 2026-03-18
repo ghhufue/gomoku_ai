@@ -1,229 +1,203 @@
 # 常用命令
 
-这份文件记录当前项目里最常用的训练、评估、模拟、回放和测试命令，方便重复使用。
+更新时间：`2026-03-18`
+
+这份文档只记录当前代码里已经存在、并且命令参数与实现一致的常用操作。
 
 ## 环境
 
-如果还没激活虚拟环境：
+激活虚拟环境：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-如果不想激活，也可以直接用：
+不激活时直接调用解释器：
 
 ```powershell
-.\.venv\Scripts\python.exe <脚本>
+.\.venv\Scripts\python.exe <script>
 ```
 
 ## 训练
 
-使用默认训练配置启动训练：
+默认训练：
 
 ```powershell
 python scripts/train.py --config configs/train.toml
 ```
 
-说明：
-
-- 训练开始前会先输出一次“实际生效”的训练策略摘要
-- run 目录下会额外生成 `history/`，包含 `updates.log`、`updates.jsonl`、`updates.csv`、`evals.jsonl`、`training_strategy.json`
-
-使用小模型预设：
+指定模型预设：
 
 ```powershell
 python scripts/train.py --config configs/train.toml --model-preset small
-```
-
-使用基础模型预设：
-
-```powershell
 python scripts/train.py --config configs/train.toml --model-preset base
-```
-
-使用大模型预设：
-
-```powershell
 python scripts/train.py --config configs/train.toml --model-preset large
 ```
 
-使用 custom 模型参数：
+自定义模型结构：
 
 ```powershell
 python scripts/train.py --config configs/train.toml --model-preset custom --model-channels 160 --model-blocks 7 --policy-channels 5 --value-channels 3 --value-hidden-dim 320
 ```
 
-指定设备：
+覆盖常见训练参数：
 
 ```powershell
 python scripts/train.py --config configs/train.toml --device cuda
-```
-
-覆盖训练轮数：
-
-```powershell
 python scripts/train.py --config configs/train.toml --updates 1000
+python scripts/train.py --config configs/train.toml --batch-size 256 --epochs 4 --lr 1e-4
+python scripts/train.py --config configs/train.toml --bot classic_rule
+python scripts/train.py --config configs/train.toml --bot-difficulty medium
 ```
 
-覆盖并行环境数：
-
-```powershell
-python scripts/train.py --config configs/train.toml --n-envs 8
-```
-
-## 恢复训练
-
-从周期 checkpoint 恢复：
+从 checkpoint 恢复：
 
 ```powershell
 python scripts/train.py --config configs/train.toml --resume-from runs\<run_name>\checkpoints\checkpoint_update_0200.pt
-```
-
-从最终模型恢复：
-
-```powershell
 python scripts/train.py --config configs/train.toml --resume-from runs\<run_name>\final_model.pt
 ```
 
-说明：
+注意：
 
-- `updates` 表示在当前恢复点基础上再训练多少个 update
-- 恢复训练会继续写回原来的 `runs\<run_name>\` 目录
-- 恢复训练后的中间统计会继续追加到该 run 的 `history/`
+- 训练入口当前默认使用 `SubprocVectorEnv`。
+- `scripts/train.py` 内部目前固定成 `8` 个 worker、每个 `2` 个 env，因此 `--n-envs` 不是完全按字面生效的用户开关。
+
+## 列出 run
+
+```powershell
+python scripts/list_runs.py --limit 20
+```
 
 ## 评估
 
-使用 `gmkt evaluate` 评估指定权重：
+评估 checkpoint：
 
 ```powershell
-python tools/cli.py evaluate --checkpoint runs\<run_name>\final_model.pt
-```
-
-如果已经把 `gmkt` 配好了，也可以直接：
-
-```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt
-```
-
-指定局数和 seed 数：
-
-```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --games 50 --num-seeds 3
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --games 20 --num-seeds 3
 ```
 
 指定对手：
 
 ```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --bot rule
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --bot random
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --bot classic_rule
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --bot reward_driven_hard
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --bot-difficulty medium
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --bot-difficulty hard
 ```
 
+关闭导出：
+
 ```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --bot random
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --no-export-visual
+python scripts/evaluate.py --checkpoint runs\<run_name>\final_model.pt --no-export-record --no-export-text --no-export-visual
 ```
 
-不导出可视化文件：
+Bot 对 Bot：
 
 ```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --no-export-visual
-```
-
-不导出任何对局文件，只看胜率：
-
-```powershell
-gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --no-export-record --no-export-text --no-export-visual
+python scripts/evaluate.py --bot-a classic_rule --bot-b reward_driven_hard
+python scripts/evaluate.py --bot-a classic_rule --bot-b reward_driven_hard --games 10 --num-seeds 3
 ```
 
 说明：
 
-- 默认会导出到 `outputs/evaluation/<时间戳_模型名>/`
-- 默认会导出：
-  - `match_record.json`
-  - `match_record.txt`
-  - `match_record_visual.json` 或 `match_record_gameXX_visual.json`
+- 未指定 `--checkpoint` 时，普通评估模式会回退到 `runs/` 下最新的 `final_model.pt`。
+- 默认导出目录是 `outputs/evaluation/<timestamp>_<label>/`。
 
-## 模拟 / 对局导出
+## CLI
 
-`play_match.py` 现在是 `evaluate.py` 的兼容包装器，默认会导出对局记录：
+如果已经配置好本地入口：
 
 ```powershell
-python scripts/play_match.py --checkpoint runs\<run_name>\final_model.pt --games 1
+.\setup_env.ps1
+gmkt help
 ```
 
-多局导出：
+常用命令：
 
 ```powershell
-python scripts/play_match.py --checkpoint runs\<run_name>\final_model.pt --games 10
+gmkt evaluate --checkpoint runs\<run_name>\final_model.pt
+gmkt evaluate --checkpoint runs\<run_name>\final_model.pt --bot reward_driven_hard
+gmkt replay --record outputs\evaluation\<export_dir>\match_record.json --game 1
+gmkt reward-table --reward configs/reward.toml
+gmkt cleanup-latest-run --yes
+gmkt cleanup-artifacts --yes
+gmkt test
 ```
 
-## 对局回放
+查看帮助：
 
-回放评估导出的第 1 局：
+```powershell
+gmkt help
+gmkt evaluate --help
+gmkt replay --help
+gmkt test --help
+```
+
+## 回放
+
+回放评估导出的对局：
 
 ```powershell
 python tools/replay_record.py --record outputs\evaluation\<export_dir>\match_record.json --game 1
-```
-
-```powershell
-gmkt replay --record outputs\evaluation\<export_dir>\match_record.json --game 1
-```
-
-回放第 50 局：
-
-```powershell
 python tools/replay_record.py --record outputs\evaluation\<export_dir>\match_record.json --game 50
-```
-
-```powershell
-gmkt replay --record outputs\evaluation\<export_dir>\match_record.json --game 50
 ```
 
 回放内置样例：
 
 ```powershell
 python tools/replay_record.py --name block_live_three
-```
-
-```powershell
-gmkt replay --name block_live_three
-```
-
-列出内置样例：
-
-```powershell
 python tools/replay_record.py --list
 ```
 
+## Reward 可视化
+
+把 reward TOML 生成为 Markdown 表格：
+
 ```powershell
-gmkt replay --list
+python tools/cli.py reward-table --reward configs/reward.toml
+gmkt reward-table --reward configs/reward.toml
 ```
 
-## 棋形浏览
+输出位置默认是：
 
-浏览内置棋形 reward：
-
-```powershell
-python tools/replay_shapes.py
+```text
+outputs/visual/reward_table.md
 ```
 
-指定 reward 配置：
+## Profiling
+
+训练 rollout / update profiling：
 
 ```powershell
-python tools/replay_shapes.py --reward configs/reward.toml
+python scripts/profile_env.py
+python scripts/profile_env.py --presets small,base --updates 2
+python scripts/profile_env.py --bot classic_rule
+python scripts/profile_env.py --bot-difficulty medium
 ```
 
-列出棋形案例：
+更小规模的 profiling：
 
 ```powershell
-python tools/replay_shapes.py --list
+python scripts/profile_env.py --presets small --updates 1 --n-envs 1 --n-steps 4 --epochs 1 --batch-size 4 --device cpu
+```
+
+环境吞吐 benchmark：
+
+```powershell
+python scripts/profile_env.py --mode benchmark --steps 200
+```
+
+Python 调用级 cProfile：
+
+```powershell
+python scripts/profile_env.py --mode cprofile --steps 200 --top-k 30
+python scripts/profile_env.py --mode cprofile --steps 200 --profile-out outputs/profile/env_step.prof
 ```
 
 ## 测试
-
-运行全部环境测试：
-
-```powershell
-python -m pytest tests/test_env.py -q
-```
 
 运行全部测试：
 
@@ -231,117 +205,44 @@ python -m pytest tests/test_env.py -q
 python -m pytest -q
 ```
 
-通过 CLI 运行测试：
+运行环境测试：
+
+```powershell
+python -m pytest tests/test_env.py -q
+```
+
+运行 C++ 相关测试：
+
+```powershell
+python -m pytest tests/test_direction_encoding.py -q
+python -m pytest tests/test_cpp_reward_events.py -q
+python -m pytest tests/test_cpp_direction_pattern_lookup.py -q
+```
+
+通过 CLI 跑测试或调试案例：
 
 ```powershell
 gmkt test
-```
-
-列出测试 case：
-
-```powershell
 gmkt test --list-cases
-```
-
-运行单个编号测试：
-
-```powershell
 gmkt test --case-id 16
+gmkt test --case block_opponent_live_three
 ```
 
-## Performance Profiling
+说明：
 
-Profile PPO training rollout/update time for `small/base/large` and write reports to `outputs/profile/`:
-```powershell
-python scripts/profile_env.py
-```
+- 截至 `2026-03-18`，`python -m pytest -q` 的真实结果是 `34 passed, 4 failed`。
+- 当前失败项主要集中在旧默认值、旧函数签名和旧模型预设断言没有同步。
 
-Run a smaller, faster profiling pass:
-```powershell
-python scripts/profile_env.py --presets small --updates 1 --n-envs 1 --n-steps 4 --epochs 1 --batch-size 4 --device cpu
-```
+## C++ 构建
 
-Profile only selected model presets:
-```powershell
-python scripts/profile_env.py --presets small,base --updates 2
-```
-
-Override the opponent bot used during profiling:
-```powershell
-python scripts/profile_env.py --bot classic_rule
-python scripts/profile_env.py --bot-difficulty medium
-```
-
-Override the report output directory:
-```powershell
-python scripts/profile_env.py --output-dir outputs/profile_test
-```
-
-Environment throughput benchmark only:
-```powershell
-python scripts/profile_env.py --mode benchmark --steps 200
-```
-
-Python call-level profile for environment stepping:
-```powershell
-python scripts/profile_env.py --mode cprofile --steps 200 --top-k 30
-```
-
-Save a raw `.prof` file for later inspection:
-```powershell
-python scripts/profile_env.py --mode cprofile --steps 200 --profile-out outputs/profile/env_step.prof
-```
-
-Profiling report outputs:
-- `outputs/profile/<timestamp>_training_profile.json`
-- `outputs/profile/<timestamp>_training_profile.md`
-- `outputs/profile/latest_training_profile.json`
-- `outputs/profile/latest_training_profile.md`
-
-The training-profile report includes:
-- rollout sampling time
-- PPO parameter update time
-- model inference related timings
-- reward/threat related function call counts and timings
-
-## Reward 配置表
-
-把 reward TOML 转成 Markdown 表格：
+构建 Python 扩展：
 
 ```powershell
-gmkt reward-table --reward configs/reward.toml
+python setup.py build_ext --inplace
 ```
 
-输出会落到：
-
-```text
-outputs/visual/reward_table.md
-```
-
-## run 管理
-
-清理最近一次 run：
+构建 C++ 辅助工具：
 
 ```powershell
-gmkt cleanup-latest-run --yes
-```
-
-清理 `outputs/`、`logs/`、`runs/` 下的产物，同时保留这些根目录和 `outputs/` 下的一级子目录：
-
-```powershell
-gmkt cleanup-artifacts --yes
-```
-
-查看可用命令帮助：
-
-```powershell
-gmkt help
-```
-
-```powershell
-gmkt evaluate --help
-```
-
-```powershell
-gmkt test --help
+powershell -ExecutionPolicy Bypass -File scripts/build_cpp_tools.ps1
 ```
