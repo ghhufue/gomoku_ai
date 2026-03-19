@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import BLACK, BOARD_SIZE, GomokuEnv, WHITE, action_to_coord
+from gomoku_ai.env import BLACK, BOARD_SIZE, GomokuEnv, WHITE, action_to_coord, call_bot_action
 from gomoku_ai.model import ActorCriticNet, model_config_from_checkpoint_payload
 from bots import available_bots, available_difficulties, create_bot
 
@@ -26,7 +26,7 @@ PLAYER_LABEL = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate a Gomoku PPO checkpoint against a configured bot.")
+    parser = argparse.ArgumentParser(description="Evaluate a Gomoku PPO checkpoint against a configured bot, or run bot vs bot.")
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--games", type=int, default=50)
     parser.add_argument("--device", type=str, default="auto")
@@ -34,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-seeds", type=int, default=1)
     parser.add_argument("--bot", type=str, default="reward_driven_hard", choices=available_bots() + ["rule", "reward-driven"])
     parser.add_argument("--bot-difficulty", type=str, default=None, choices=available_difficulties())
+    parser.add_argument("--bot-a", type=str, default=None, choices=available_bots() + ["rule", "reward-driven"])
+    parser.add_argument("--bot-a-difficulty", type=str, default=None, choices=available_difficulties())
+    parser.add_argument("--bot-b", type=str, default=None, choices=available_bots() + ["rule", "reward-driven"])
+    parser.add_argument("--bot-b-difficulty", type=str, default=None, choices=available_difficulties())
     parser.add_argument("--export-record", action="store_true", default=True, help="Export replay-compatible match records.")
     parser.add_argument("--no-export-record", action="store_false", dest="export_record", help="Disable replay-compatible match record export.")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/evaluation"))
@@ -63,6 +67,10 @@ def choose_action(model: ActorCriticNet, obs: np.ndarray, mask: np.ndarray, devi
 
 def build_opponent(bot_name: str, bot_difficulty: str | None = None):
     return create_bot(name=bot_name, difficulty=bot_difficulty)
+
+
+def bot_label(bot_name: str | None, bot_difficulty: str | None = None) -> str:
+    return bot_difficulty or str(bot_name)
 
 
 def find_latest_checkpoint() -> Path:
@@ -103,6 +111,11 @@ def build_export_session_dir(output_root: Path, checkpoint_path: Path, now: date
     timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
     model_label = derive_model_label(checkpoint_path)
     return output_root / f"{timestamp}_{model_label}"
+
+
+def build_export_session_dir_for_label(output_root: Path, label: str, now: datetime | None = None) -> Path:
+    timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
+    return output_root / f"{timestamp}_{sanitize_path_fragment(label)}"
 
 
 def board_to_ascii(board: np.ndarray) -> str:
@@ -199,6 +212,78 @@ def play_game(
         "agent_player": PLAYER_LABEL[agent_player],
         "bot_player": PLAYER_LABEL[bot_player],
         "bot_name": bot_difficulty or bot_name,
+        "result": outcome,
+        "illegal_move": bool(result.info.get("illegal_move", False)),
+        "winner": PLAYER_LABEL[result.info["winner"]] if "winner" in result.info else None,
+        "total_reward": float(total_reward),
+        "num_moves": len(moves) if include_record else int(steps),
+    }
+    if include_record:
+        game["moves"] = moves
+        game["final_board_ascii"] = board_to_ascii(env.board)
+    return game
+
+
+def play_bot_game(
+    seed: int,
+    bot_a_name: str,
+    bot_b_name: str,
+    bot_a_difficulty: str | None = None,
+    bot_b_difficulty: str | None = None,
+    verbose: bool = True,
+    include_record: bool = False,
+) -> dict[str, object]:
+    bot_b = build_opponent(bot_b_name, bot_b_difficulty)
+    env = GomokuEnv(opponent=bot_b, seed=seed)
+    bot_a = build_opponent(bot_a_name, bot_a_difficulty)
+    obs, mask = env.reset()
+
+    moves: list[dict[str, object]] = []
+    bot_a_player = env.agent_player
+    bot_b_player = -bot_a_player
+    bot_a_label = bot_label(bot_a_name, bot_a_difficulty)
+    bot_b_label = bot_label(bot_b_name, bot_b_difficulty)
+
+    if include_record:
+        opening_action = detect_opening_action(env.board, bot_b_player)
+        if opening_action is not None:
+            record_move(moves, bot_b_player, opening_action, "bot_b")
+
+    done = False
+    result = None
+    steps = 0
+    total_reward = 0.0
+    rng = env.rng
+    while not done:
+        action = call_bot_action(bot_a, env.board.copy(), bot_a_player, rng)
+        result = env.step(action)
+        if include_record:
+            record_move(moves, bot_a_player, action, "bot_a")
+            opponent_action = result.info.get("opponent_action")
+            if opponent_action is not None:
+                record_move(moves, bot_b_player, int(opponent_action), "bot_b")
+
+        obs = result.observation
+        mask = result.action_mask
+        done = result.done
+        total_reward += result.reward
+        steps += 1
+
+    assert result is not None
+    outcome = result.info.get("agent_result")
+    if verbose:
+        print(f"game seed={seed} result={outcome} steps={steps} total_reward={total_reward:.2f}")
+
+    game = {
+        "game_index": 1,
+        "name": f"game_seed_{seed}",
+        "description": f"{bot_a_label} vs {bot_b_label} bot match exported by scripts/evaluate.py",
+        "seed": seed,
+        "agent_player": PLAYER_LABEL[bot_a_player],
+        "bot_player": PLAYER_LABEL[bot_b_player],
+        "bot_name": bot_b_label,
+        "agent_name": bot_a_label,
+        "mode": "bot_vs_bot",
         "result": outcome,
         "illegal_move": bool(result.info.get("illegal_move", False)),
         "winner": PLAYER_LABEL[result.info["winner"]] if "winner" in result.info else None,
@@ -324,6 +409,20 @@ def build_match_payload(checkpoint_path: Path, device: str, games: list[dict[str
     return payload
 
 
+def build_bot_match_payload(bot_a_name: str, bot_b_name: str, games: list[dict[str, object]]) -> dict[str, object]:
+    payload = {
+        "schema_version": 2,
+        "record_type": "gomoku_match_record",
+        "mode": "bot_vs_bot",
+        "bot_a_name": bot_a_name,
+        "bot_b_name": bot_b_name,
+        "games": games,
+    }
+    for index, game in enumerate(payload["games"], start=1):
+        game["game_index"] = index
+    return payload
+
+
 def render_text_report(games: list[dict[str, object]]) -> str:
     sections: list[str] = []
     for idx, game in enumerate(games, start=1):
@@ -368,8 +467,7 @@ def build_visual_payload(game: dict[str, object]) -> dict[str, object]:
 
 
 def export_match_outputs(
-    checkpoint_path: Path,
-    device: str,
+    payload: dict[str, object],
     games: list[dict[str, object]],
     output_dir: Path,
     filename: str,
@@ -379,7 +477,6 @@ def export_match_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_paths: list[Path] = []
     output_path = output_dir / f"{filename}.json"
-    payload = build_match_payload(checkpoint_path, device, games)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     output_paths.append(output_path)
 
@@ -425,16 +522,88 @@ def print_summary(metrics: dict[str, float]) -> None:
     print(f"avg_steps={metrics['avg_steps']:.2f}")
 
 
+def is_bot_vs_bot_mode(args: argparse.Namespace) -> bool:
+    return args.checkpoint is None and args.bot_a is not None and args.bot_b is not None
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    verbose = not args.quiet_games
+    seeds = [args.seed + idx for idx in range(args.num_seeds)]
+    default_games = build_parser().get_default("games")
+
+    if is_bot_vs_bot_mode(args):
+        games_to_play = 1 if args.games == default_games else args.games
+        bot_games: list[dict[str, object]] = []
+        wins = 0
+        losses = 0
+        draws = 0
+        illegal_moves = 0
+        steps: list[int] = []
+        for seed in seeds:
+            for game_idx in range(games_to_play):
+                game = play_bot_game(
+                    seed=seed + game_idx,
+                    bot_a_name=args.bot_a,
+                    bot_b_name=args.bot_b,
+                    bot_a_difficulty=args.bot_a_difficulty,
+                    bot_b_difficulty=args.bot_b_difficulty,
+                    verbose=verbose,
+                    include_record=args.export_record,
+                )
+                bot_games.append(game)
+                if game["result"] == "win":
+                    wins += 1
+                elif game["result"] == "loss":
+                    losses += 1
+                else:
+                    draws += 1
+                if game["illegal_move"]:
+                    illegal_moves += 1
+                steps.append(int(game["num_moves"]))
+        summary = {
+            "num_seeds": float(len(seeds)),
+            "games_per_seed": float(games_to_play),
+            "total_games": float(len(bot_games)),
+            "wins": float(wins),
+            "losses": float(losses),
+            "draws": float(draws),
+            "illegal_moves": float(illegal_moves),
+            "win_rate": wins / len(bot_games) if bot_games else 0.0,
+            "win_rate_std": 0.0,
+            "avg_steps": sum(steps) / len(steps) if steps else 0.0,
+        }
+        print("mode=bot_vs_bot")
+        print(f"bot_a={bot_label(args.bot_a, args.bot_a_difficulty)}")
+        print(f"bot_b={bot_label(args.bot_b, args.bot_b_difficulty)}")
+        print_summary(summary)
+        if args.export_record:
+            export_dir = build_export_session_dir_for_label(
+                args.output_dir.resolve(),
+                f"{bot_label(args.bot_a, args.bot_a_difficulty)}_vs_{bot_label(args.bot_b, args.bot_b_difficulty)}",
+            )
+            output_paths = export_match_outputs(
+                payload=build_bot_match_payload(
+                    bot_label(args.bot_a, args.bot_a_difficulty),
+                    bot_label(args.bot_b, args.bot_b_difficulty),
+                    bot_games,
+                ),
+                games=bot_games,
+                output_dir=export_dir,
+                filename=Path(args.filename).stem or "match_record",
+                export_text=args.export_text,
+                export_visual=args.export_visual,
+            )
+            for path in output_paths:
+                print(f"saved: {path}")
+        return
+
     device = resolve_device(args.device)
     print(f"using device: {device}")
     checkpoint_path, warning = resolve_checkpoint(args.checkpoint)
     if warning is not None:
         print(f"warning: {warning}")
     model = load_model_from_checkpoint(checkpoint_path, device)
-    verbose = not args.quiet_games
-    seeds = [args.seed + idx for idx in range(args.num_seeds)]
     metrics = evaluate_across_seeds(
         model=model,
         games=args.games,
@@ -463,8 +632,7 @@ def main(argv: list[str] | None = None) -> None:
                 )
         export_dir = build_export_session_dir(args.output_dir.resolve(), checkpoint_path)
         output_paths = export_match_outputs(
-            checkpoint_path=checkpoint_path,
-            device=device,
+            payload=build_match_payload(checkpoint_path, device, games),
             games=games,
             output_dir=export_dir,
             filename=Path(args.filename).stem or "match_record",
