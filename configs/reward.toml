@@ -20,7 +20,7 @@ dead_three = 0.0
 dead_three_gap1 = 0.0
 dead_three_gap2 = 0.0
 
-live_four = 200.0
+live_four = 120.0          # ↓
 live_four_gap1 = 50.0
 sleep_four = 50.0
 sleep_four_gap1 = 25.0
@@ -31,10 +31,11 @@ five = 1000.0
 
 [reward.special]
 step_penalty = -1.0
-double_live_three_bonus = 100.0
-block_winning_bonus = 300.0
-block_live_four_bonus = 30.0
-block_live_three_bonus = 20.0
+double_live_three_bonus = 40.0       # ↓
+block_winning_bonus = 200.0          # ↑
+block_live_four_bonus = 120.0        # ↑
+block_live_three_bonus = 40.0        # ↑
+
 unresolved_winning_threat_penalty = 300.0
 unresolved_four_threat_penalty = 300.0
 unresolved_live_three_fatal_penalty = 200.0

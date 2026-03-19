@@ -301,6 +301,8 @@ class PPOTrainer:
 
         for local_update in iterator:
             update = start_update + local_update
+            if hasattr(self.env, "set_current_update"):
+                self.env.set_current_update(update)
             rollout_start = perf_counter()
             rollout, obs, masks, rollout_stats = self.collect_rollout(obs, masks, update)
             rollout_time = perf_counter() - rollout_start
