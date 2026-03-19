@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import multiprocessing as mp
+from pathlib import Path
 from typing import Iterable
 
 import numpy as np
@@ -14,6 +16,8 @@ from gomoku_ai.cpp_backend import (
     env_winner as cpp_env_winner,
     evaluate_env_reward as cpp_evaluate_env_reward,
     evaluate_reward as cpp_evaluate_reward,
+    infer_next_player as cpp_infer_next_player,
+    restore_env_state as cpp_restore_env_state,
     reset_env_state as cpp_reset_env_state,
 )
 
@@ -66,6 +70,8 @@ LIVE_THREE_IDX = 3
 SLEEP_THREE_IDX = 4
 LIVE_TWO_IDX = 5
 
+_LOADED_RESET_STATE_CACHE: dict[Path, tuple[dict[str, object], ...]] = {}
+
 
 @dataclass
 class StepResult:
@@ -74,6 +80,86 @@ class StepResult:
     reward: float
     done: bool
     info: dict
+
+
+def _five_index() -> int:
+    return 24
+
+
+def _normalize_reset_state(item: dict[str, object], source_path: Path, index: int) -> dict[str, object] | None:
+    board_payload = item.get("board")
+    black_counts_payload = item.get("black_counts")
+    white_counts_payload = item.get("white_counts")
+    if board_payload is None or black_counts_payload is None or white_counts_payload is None:
+        return None
+
+    board = np.asarray(board_payload, dtype=np.int8)
+    if board.shape != (BOARD_SIZE, BOARD_SIZE):
+        raise ValueError(f"invalid board shape in {source_path} item #{index}: {board.shape}")
+
+    black_counts = tuple(int(value) for value in black_counts_payload)
+    white_counts = tuple(int(value) for value in white_counts_payload)
+    if len(black_counts) != 25 or len(white_counts) != 25:
+        raise ValueError(f"invalid dense count length in {source_path} item #{index}")
+
+    winner = 0
+    if black_counts[_five_index()] > 0:
+        winner = BLACK
+    elif white_counts[_five_index()] > 0:
+        winner = WHITE
+    done = bool(winner != 0 or not np.any(board == EMPTY))
+    if done:
+        return None
+
+    next_player = cpp_infer_next_player(board) if CPP_BACKEND_AVAILABLE else (
+        BLACK if int(np.count_nonzero(board == BLACK)) == int(np.count_nonzero(board == WHITE)) else WHITE
+    )
+
+    return {
+        "board": board,
+        "black_counts": black_counts,
+        "white_counts": white_counts,
+        "done": done,
+        "winner": winner,
+        "next_player": int(next_player),
+    }
+
+
+def _collect_reset_states(payload: object, source_path: Path, results: list[dict[str, object]]) -> None:
+    if isinstance(payload, dict):
+        normalized = _normalize_reset_state(payload, source_path, len(results) + 1)
+        if normalized is not None:
+            results.append(normalized)
+        for value in payload.values():
+            _collect_reset_states(value, source_path, results)
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            _collect_reset_states(item, source_path, results)
+
+
+def load_reset_states(path: str | Path) -> tuple[dict[str, object], ...]:
+    resolved = Path(path).resolve()
+    cached = _LOADED_RESET_STATE_CACHE.get(resolved)
+    if cached is not None:
+        return cached
+
+    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    results: list[dict[str, object]] = []
+    _collect_reset_states(payload, resolved, results)
+    unique_states: list[dict[str, object]] = []
+    seen: set[bytes] = set()
+    for item in results:
+        key = np.asarray(item["board"], dtype=np.int8).tobytes()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_states.append(item)
+    states = tuple(unique_states)
+    if not states:
+        raise ValueError(f"no usable reset states found in {resolved}")
+    _LOADED_RESET_STATE_CACHE[resolved] = states
+    return states
 
 
 def action_to_coord(action: int) -> tuple[int, int]:
@@ -287,7 +373,13 @@ class GomokuEnv:
 
     _next_env_id = 0
 
-    def __init__(self, opponent, seed: int | None = None):
+    def __init__(
+        self,
+        opponent,
+        seed: int | None = None,
+        reset_states: tuple[dict[str, object], ...] | None = None,
+        reset_state_prob: float = 0.0,
+    ):
         self.opponent = opponent
         self.rng = np.random.default_rng(seed)
         self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
@@ -295,6 +387,8 @@ class GomokuEnv:
         self.done = False
         self.env_id = GomokuEnv._next_env_id
         GomokuEnv._next_env_id += 1
+        self.reset_states = reset_states or ()
+        self.reset_state_prob = float(reset_state_prob)
 
     def __del__(self):
         if CPP_BACKEND_AVAILABLE:
@@ -306,6 +400,21 @@ class GomokuEnv:
     def reset(self) -> tuple[np.ndarray, np.ndarray]:
         self.board.fill(EMPTY)
         self.done = False
+        if self.reset_states and self.reset_state_prob > 0.0 and self.rng.random() < self.reset_state_prob:
+            state = self.reset_states[int(self.rng.integers(0, len(self.reset_states)))]
+            self.board[:, :] = np.asarray(state["board"], dtype=np.int8)
+            self.agent_player = int(state["next_player"])
+            if CPP_BACKEND_AVAILABLE:
+                cpp_restore_env_state(
+                    self.env_id,
+                    self.board,
+                    list(state["black_counts"]),
+                    list(state["white_counts"]),
+                    bool(state["done"]),
+                    int(state["winner"]),
+                )
+            return self.observation(), self.action_mask()
+
         self.agent_player = BLACK if self.rng.random() < 0.5 else WHITE
 
         if self.agent_player == WHITE:
@@ -332,8 +441,6 @@ class GomokuEnv:
     def step(self, action: int) -> StepResult:
         if self.done:
             raise RuntimeError("Environment is done. Call reset() before step().")
-        if CPP_BACKEND_AVAILABLE:
-            cpp_reset_env_state(self.env_id, self.board)
 
         row, col = action_to_coord(action)
         if not inside(row, col) or self.board[row, col] != EMPTY:
@@ -416,6 +523,8 @@ def _subproc_vector_worker(connection, env_specs: list[dict]) -> None:
         GomokuEnv(
             opponent=create_bot(name=spec["bot_name"], difficulty=(spec["bot_difficulty"] or None)),
             seed=int(spec["seed"]),
+            reset_states=tuple(spec.get("reset_states", ()) or ()),
+            reset_state_prob=float(spec.get("reset_state_prob", 0.0)),
         )
         for spec in env_specs
     ]

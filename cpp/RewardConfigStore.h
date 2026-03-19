@@ -13,7 +13,6 @@ struct RewardConfig {
     double step_penalty = -1.0;
     double double_live_three_bonus = 10.0;
     double block_winning_bonus = 100.0;
-    double block_live_four_bonus = 30.0;
     double block_live_three_bonus = 20.0;
     double unresolved_winning_threat_penalty = 120.0;
     double unresolved_four_threat_penalty = 45.0;

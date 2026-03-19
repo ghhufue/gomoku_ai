@@ -32,7 +32,7 @@ class PPOConfig:
     gae_lambda: float = 0.95
     clip_range: float = 0.2
     learning_rate: float = 3e-4
-    value_coef: float = 0.5
+    value_coef: float = 0.05
     entropy_coef: float = 0.03
     max_grad_norm: float = 0.5
     batch_size: int = 256

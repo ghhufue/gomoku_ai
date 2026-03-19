@@ -29,8 +29,14 @@ reward_config = "configs/reward.toml"
 # 每次 PPO rollout 使用的并行环境数量。
 n_envs = 8
 
+# 采样使用的 worker 进程数。实际总环境数 = worker_processes * envs_per_worker。
+worker_processes = 8
+
+# 每个 worker 进程内部创建的环境数。
+envs_per_worker = 3
+
 # 每个环境在一次 PPO 更新前收集的步数。
-n_steps = 256
+n_steps = 128
 
 # 本次执行要跑多少次 PPO update。
 # 如果是恢复训练，这里表示“额外再跑多少次”，不是总 update 数。

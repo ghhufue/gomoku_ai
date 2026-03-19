@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import SubprocVectorEnv
+from gomoku_ai.env import SubprocVectorEnv, load_reset_states
 from gomoku_ai.model import (
     MODEL_PRESETS,
     ActorCriticNet,
@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-new-branch", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--n-envs", type=int, default=None)
+    parser.add_argument("--worker-processes", type=int, default=None)
+    parser.add_argument("--envs-per-worker", type=int, default=None)
     parser.add_argument("--n-steps", type=int, default=None)
     parser.add_argument("--updates", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -53,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-progress", type=str, default=None)
     parser.add_argument("--bot", type=str, default=None)
     parser.add_argument("--bot-difficulty", type=str, default=None)
+    parser.add_argument("--reset-state-path", type=Path, default=None)
+    parser.add_argument("--reset-state-prob", type=float, default=None)
     return parser
 
 
@@ -269,6 +273,9 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
         "env_backend: workers={worker_processes} envs_per_worker={envs_per_worker}".format(**training)
     )
     print(
+        "reset_states: prob={reset_state_prob} path={reset_state_path}".format(**training)
+    )
+    print(
         "evaluation: eval_every={eval_every} eval_games={eval_games} eval_seeds={eval_seeds}".format(**evaluation)
     )
     print(
@@ -388,8 +395,14 @@ def main() -> None:
                 if args.show_progress is not None
                 else bool(training.get("show_progress", True))
             ),
-            "worker_processes": 8,
-            "envs_per_worker": 2,
+            "worker_processes": int(args.worker_processes if args.worker_processes is not None else training.get("worker_processes", 8)),
+            "envs_per_worker": int(args.envs_per_worker if args.envs_per_worker is not None else training.get("envs_per_worker", 2)),
+            "reset_state_path": (
+                args.reset_state_path.resolve()
+                if args.reset_state_path is not None
+                else config_path(training.get("reset_state_path"))
+            ),
+            "reset_state_prob": float(args.reset_state_prob if args.reset_state_prob is not None else training.get("reset_state_prob", 0.0)),
         },
         "model": {"preset": model_preset, **model_config.to_dict()},
         "evaluation": {
@@ -424,9 +437,22 @@ def main() -> None:
     torch.manual_seed(config["runtime"]["seed"])
     device = resolve_device(config["runtime"]["device"])
     config["runtime"]["device"] = device
+    if config["training"]["worker_processes"] <= 0:
+        raise ValueError("worker_processes must be positive")
+    if config["training"]["envs_per_worker"] <= 0:
+        raise ValueError("envs_per_worker must be positive")
     config["training"]["n_envs"] = (
         config["training"]["worker_processes"] * config["training"]["envs_per_worker"]
     )
+    reset_states: tuple[dict[str, object], ...] = ()
+    if config["training"]["reset_state_prob"] < 0.0 or config["training"]["reset_state_prob"] > 1.0:
+        raise ValueError("reset_state_prob must be between 0 and 1")
+    if config["training"]["reset_state_prob"] > 0.0:
+        reset_state_path = config["training"]["reset_state_path"]
+        if reset_state_path is None:
+            raise ValueError("reset_state_path is required when reset_state_prob is greater than 0")
+        reset_states = load_reset_states(reset_state_path)
+        print(f"loaded {len(reset_states)} reset states from {reset_state_path}")
     layout = resolve_run_layout(config)
     print_training_strategy(config, layout)
 
@@ -435,6 +461,8 @@ def main() -> None:
             "seed": config["runtime"]["seed"] + idx,
             "bot_name": config["opponent"]["bot_name"],
             "bot_difficulty": config["opponent"]["bot_difficulty"],
+            "reset_states": reset_states,
+            "reset_state_prob": config["training"]["reset_state_prob"],
         }
         for idx in range(config["training"]["n_envs"])
     ]

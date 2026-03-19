@@ -96,8 +96,6 @@ void parse_assignment(const std::string& section, const std::string& line, Rewar
         config->double_live_three_bonus = value;
     } else if (key == "block_winning_bonus") {
         config->block_winning_bonus = value;
-    } else if (key == "block_live_four_bonus") {
-        config->block_live_four_bonus = value;
     } else if (key == "block_live_three_bonus") {
         config->block_live_three_bonus = value;
     } else if (key == "unresolved_winning_threat_penalty") {

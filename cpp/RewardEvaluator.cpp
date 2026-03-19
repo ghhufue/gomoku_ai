@@ -1,6 +1,7 @@
 #include "RewardEvaluator.h"
 #include "GameStateStore.h"
 #include "precompute/DirectionDeltaTable.h"
+#include "precompute/RushFourDataset.h"
 #include "RewardConfigStore.h"
 #include "utils/direction_pattern_lookup.h"
 
@@ -149,13 +150,24 @@ namespace gomoku
             return score;
         }
 
+        RewardEvaluator::DenseCountArray apply_dense_delta_local(
+            const RewardEvaluator::DenseCountArray &previous,
+            const RewardEvaluator::DenseCountArray &delta)
+        {
+            RewardEvaluator::DenseCountArray updated = previous;
+            for (std::size_t index = 0; index < kTrackedStateValueCount; ++index)
+            {
+                updated[index] += delta[index];
+            }
+            return updated;
+        }
+
         py::dict build_special_rewards_payload(const RewardResult &result)
         {
             py::dict payload;
             payload["step_penalty"] = result.step_penalty;
             payload["double_live_three_bonus"] = result.double_live_three_bonus;
             payload["block_winning_bonus"] = result.block_winning_bonus;
-            payload["block_live_four_bonus"] = result.block_live_four_bonus;
             payload["block_live_three_bonus"] = result.block_live_three_bonus;
             payload["unresolved_winning_threat_penalty"] = result.unresolved_winning_threat_penalty;
             payload["unresolved_four_threat_penalty"] = result.unresolved_four_threat_penalty;
@@ -302,9 +314,15 @@ namespace gomoku
         }
 
         const RewardConfig &config = current_reward_config();
-        py::array_t<std::int8_t> board_after = copyBoardAndApplyMove(board_before, row, col, player);
-        const DenseCountArray after_self = GameStateStore::countBoardStatesForPlayer(board_after, player);
-        const DenseCountArray after_opp = GameStateStore::countBoardStatesForPlayer(board_after, -player);
+        const DenseCountArray after_self = applyDelta(before_self, self_delta);
+        const DenseCountArray after_opp = applyDelta(before_opp, opp_delta);
+        const int before_opp_four_threats = fourThreatTotal(before_opp);
+        const int after_opp_four_threats = fourThreatTotal(after_opp);
+        const int before_opp_live_threes = liveThreeTotal(before_opp);
+        const int after_opp_live_threes = liveThreeTotal(after_opp);
+        const bool blocked_winning_threat =
+            (before_opp_four_threats > 0 && after_opp_four_threats == 0) ||
+            (before_opp_live_threes - after_opp_live_threes >= 2);
 
         RewardResult result{};
         result.offense_score = scoreDelta(self_delta, config, false);
@@ -324,12 +342,12 @@ namespace gomoku
             result.double_live_three_bonus = config.double_live_three_bonus;
             result.reward += result.double_live_three_bonus;
         }
-        if (winningTotal(before_opp) > 0 && winningTotal(after_opp) == 0)
+        if (blocked_winning_threat)
         {
             result.block_winning_bonus = config.block_winning_bonus;
             result.reward += result.block_winning_bonus;
         }
-        else if (liveThreeTotal(before_opp) > liveThreeTotal(after_opp))
+        else if (before_opp_live_threes > after_opp_live_threes)
         {
             result.block_live_three_bonus = config.block_live_three_bonus;
             result.reward += result.block_live_three_bonus;
@@ -825,12 +843,10 @@ namespace gomoku
                         const PackedDirectionDeltaEntry &opp_entry = lookup_direction_delta_entry(opp_side_cells);
                         accumulate_dense_delta_local(&opp_delta, opp_entry.other_delta);
                     }
-                    FlatBoardArray after_board = board;
-                    after_board[static_cast<std::size_t>(action)] = static_cast<std::int8_t>(player);
                     const RewardEvaluator::DenseCountArray after_self =
-                        GameStateStore::countBoardStatesForPlayer(after_board, player);
+                        apply_dense_delta_local(before_self, self_delta);
                     const RewardEvaluator::DenseCountArray after_opp =
-                        GameStateStore::countBoardStatesForPlayer(after_board, -player);
+                        apply_dense_delta_local(before_opp, opp_delta);
                     const RewardConfig &config = current_reward_config();
                     candidate.offense_score = score_delta_local(self_delta, config, false);
                     candidate.defense_score = score_delta_local(opp_delta, config, true);
@@ -844,15 +860,19 @@ namespace gomoku
                     {
                         candidate.reward += config.double_live_three_bonus;
                     }
-                    if (winning_total_local(before_opp) > 0 && winning_total_local(after_opp) == 0)
+                    const int before_opp_four_threats = four_threat_total_local(before_opp);
+                    const int after_opp_four_threats = four_threat_total_local(after_opp);
+                    const int before_opp_live_threes = live_three_total_local(before_opp);
+                    const int after_opp_live_threes = live_three_total_local(after_opp);
+                    const bool blocked_winning_threat =
+                        (before_opp_four_threats > 0 && after_opp_four_threats == 0) ||
+                        (before_opp_live_threes - after_opp_live_threes >= 2);
+
+                    if (blocked_winning_threat)
                     {
                         candidate.reward += config.block_winning_bonus;
                     }
-                    else if (four_threat_total_local(before_opp) > four_threat_total_local(after_opp))
-                    {
-                        candidate.reward += config.block_winning_bonus;
-                    }
-                    else if (live_three_total_local(before_opp) > live_three_total_local(after_opp))
+                    else if (before_opp_live_threes > after_opp_live_threes)
                     {
                         candidate.reward += config.block_live_three_bonus;
                     }
@@ -936,10 +956,31 @@ PYBIND11_MODULE(_cpp_backend, module)
         py::arg("player"),
         py::arg("thread_batch_size") = 6);
     module.def("reset_env_state", &gomoku::reset_env_state, py::arg("env_id"), py::arg("board"));
+    module.def(
+        "restore_env_state",
+        &gomoku::restore_env_state,
+        py::arg("env_id"),
+        py::arg("board"),
+        py::arg("black_counts"),
+        py::arg("white_counts"),
+        py::arg("done"),
+        py::arg("winner"));
+    module.def(
+        "generate_rush_four_opening_group",
+        &gomoku::precompute::generate_rush_four_opening_group,
+        py::arg("group_count") = 1,
+        py::arg("seed") = 0);
+    module.def(
+        "write_rush_four_opening_group",
+        &gomoku::precompute::write_rush_four_opening_group,
+        py::arg("output_path") = "outputs/build/precompute/rush_four_group.json",
+        py::arg("group_count") = 1,
+        py::arg("seed") = 0);
     module.def("clear_env_state", &gomoku::clear_env_state, py::arg("env_id"));
     module.def("apply_env_move", &gomoku::apply_env_move, py::arg("env_id"), py::arg("row"), py::arg("col"), py::arg("player"));
     module.def("env_done", &gomoku::env_done, py::arg("env_id"));
     module.def("env_winner", &gomoku::env_winner, py::arg("env_id"));
+    module.def("infer_next_player", &gomoku::infer_next_player, py::arg("board"));
     module.def("list_state_values", &gomoku::list_state_values);
     module.def("decode_reward_events", &gomoku::decode_reward_events, py::arg("events"));
     module.def("debug_encode_direction_side_states", &gomoku::debug_encode_direction_side_states, py::arg("states"));

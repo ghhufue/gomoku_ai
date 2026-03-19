@@ -32,8 +32,7 @@ five = 1000.0
 [reward.special]
 step_penalty = -1.0
 double_live_three_bonus = 100.0
-block_winning_bonus = 300.0
-block_live_four_bonus = 30.0
+block_winning_bonus = 500.0
 block_live_three_bonus = 20.0
 unresolved_winning_threat_penalty = 300.0
 unresolved_four_threat_penalty = 300.0

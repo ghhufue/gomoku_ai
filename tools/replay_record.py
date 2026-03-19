@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.cpp_backend import BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE, decode_reward_events
+from gomoku_ai.cpp_backend import BACKEND_AVAILABLE as CPP_BACKEND_AVAILABLE, decode_reward_events, list_state_values
 from gomoku_ai.env import BLACK, BOARD_SIZE, EMPTY, WHITE, evaluate_reward
 from utils.board_printer import print_board
 
@@ -43,6 +43,15 @@ class LoadedRecord:
     description: str
     steps: tuple[ReplayStep, ...]
     metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class RushFourBoard:
+    group_index: int
+    symmetry: str
+    board: np.ndarray
+    black_counts: tuple[int, ...]
+    white_counts: tuple[int, ...]
 
 
 def list_records() -> list[Path]:
@@ -146,6 +155,61 @@ def load_record(path: Path, game_index: int = 1) -> LoadedRecord:
         steps=tuple(steps),
         metadata=dict(game_payload.get("_record_metadata", {})),
     )
+
+
+def load_rush_four_group(path: Path) -> tuple[RushFourBoard, ...]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not payload:
+        raise ValueError(f"rush four group must be a non-empty list: {path}")
+
+    items: list[RushFourBoard] = []
+    for index, item in enumerate(payload, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"rush four item #{index} must be an object")
+        board_payload = item.get("board")
+        if not isinstance(board_payload, list):
+            raise ValueError(f"rush four item #{index} is missing board")
+        board = np.asarray(board_payload, dtype=np.int8)
+        if board.shape != (BOARD_SIZE, BOARD_SIZE):
+            raise ValueError(f"rush four item #{index} board must have shape ({BOARD_SIZE}, {BOARD_SIZE})")
+        black_counts = tuple(int(value) for value in item.get("black_counts", []))
+        white_counts = tuple(int(value) for value in item.get("white_counts", []))
+        items.append(
+            RushFourBoard(
+                group_index=int(item.get("group_index", 0)),
+                symmetry=str(item.get("symmetry", f"item_{index}")),
+                board=board,
+                black_counts=black_counts,
+                white_counts=white_counts,
+            )
+        )
+    return tuple(items)
+
+
+def tracked_state_names() -> tuple[str, ...]:
+    if not CPP_BACKEND_AVAILABLE:
+        return ()
+    values = list_state_values()
+    names = [str(item["name"]) for item in values]
+    names.append("five")
+    return tuple(names)
+
+
+TRACKED_STATE_NAMES = tracked_state_names()
+
+
+def format_state_counts(counts: tuple[int, ...]) -> str:
+    if not counts:
+        return "-"
+    parts: list[str] = []
+    for index, value in enumerate(counts):
+        if value == 0:
+            continue
+        if index < len(TRACKED_STATE_NAMES):
+            parts.append(f"{TRACKED_STATE_NAMES[index]}={value}")
+        else:
+            parts.append(f"state_{index}={value}")
+    return ", ".join(parts) if parts else "-"
 
 
 def clear_screen() -> None:
@@ -268,11 +332,61 @@ def replay_record(record: LoadedRecord) -> int:
             cursor = min(len(record.steps) - 1, cursor + 1)
 
 
+def first_item_per_group(items: tuple[RushFourBoard, ...]) -> tuple[RushFourBoard, ...]:
+    selected: list[RushFourBoard] = []
+    seen_groups: set[int] = set()
+    for item in items:
+        if item.group_index in seen_groups:
+            continue
+        selected.append(item)
+        seen_groups.add(item.group_index)
+    return tuple(selected)
+
+
+def render_rush_four_board(items: tuple[RushFourBoard, ...], cursor: int) -> None:
+    clear_screen()
+    current = items[cursor]
+    print(f"[group] {cursor + 1}/{len(items)} group_index={current.group_index} symmetry={current.symmetry}")
+    print_board(current.board)
+    print(f"[black] {format_state_counts(current.black_counts)}")
+    print(f"[white] {format_state_counts(current.white_counts)}")
+    print()
+    print("Left/Right or A/D to switch, Q to quit")
+
+
+def replay_rush_four_group(items: tuple[RushFourBoard, ...]) -> int:
+    if not items:
+        print("rush four group is empty")
+        return 1
+
+    groups = first_item_per_group(items)
+    if not groups:
+        print("rush four group has no displayable groups")
+        return 1
+
+    cursor = 0
+    while True:
+        render_rush_four_board(groups, cursor)
+        key = read_key()
+        if key == "quit":
+            return 0
+        if key == "left":
+            cursor = max(0, cursor - 1)
+        elif key == "right":
+            cursor = min(len(groups) - 1, cursor + 1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay a record and inspect per-move reward.")
     parser.add_argument("--record", type=Path, default=None, help="Path to record JSON under tests/game_records or any JSON file.")
     parser.add_argument("--name", type=str, default=None, help="Record name under tests/game_records without .json.")
     parser.add_argument("--game", type=int, default=1, help="Game index to replay when the record contains `games`.")
+    parser.add_argument(
+        "--rush-four-group",
+        type=Path,
+        default=None,
+        help="Path to a generated rush-four group JSON, such as outputs/build/rush_four_group.json.",
+    )
     parser.add_argument("--list", action="store_true", help="List available built-in records.")
     return parser
 
@@ -293,6 +407,18 @@ def main(argv: list[str] | None = None) -> int:
         for path in list_records():
             print(path.stem)
         return 0
+
+    if args.rush_four_group is not None:
+        group_path = args.rush_four_group.resolve()
+        if not group_path.exists():
+            print(f"rush four group not found: {group_path}")
+            return 1
+        try:
+            items = load_rush_four_group(group_path)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        return replay_rush_four_group(items)
 
     record_path = resolve_record(args)
     if record_path is None:

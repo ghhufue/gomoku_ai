@@ -1,8 +1,8 @@
 # 常用命令
 
-更新时间：`2026-03-18`
+更新时间：`2026-03-19`
 
-这份文档只记录当前代码里已经存在、并且命令参数与实现一致的常用操作。
+这份文档只记录当前仓库里已经存在、并且命令参数与实现一致的常用操作。
 
 ## 环境
 
@@ -50,6 +50,13 @@ python scripts/train.py --config configs/train.toml --bot classic_rule
 python scripts/train.py --config configs/train.toml --bot-difficulty medium
 ```
 
+按概率从预制状态开始训练：
+
+```powershell
+python scripts/train.py --config configs/train.toml --reset-state-path outputs\build\precompute\rush_four_group.json --reset-state-prob 0.3
+python scripts/train.py --config configs/train.toml --reset-state-prob 0
+```
+
 从 checkpoint 恢复：
 
 ```powershell
@@ -57,12 +64,12 @@ python scripts/train.py --config configs/train.toml --resume-from runs\<run_name
 python scripts/train.py --config configs/train.toml --resume-from runs\<run_name>\final_model.pt
 ```
 
-注意：
+说明：
 
 - 训练入口当前默认使用 `SubprocVectorEnv`。
-- `scripts/train.py` 内部目前固定成 `8` 个 worker、每个 `2` 个 env，因此 `--n-envs` 不是完全按字面生效的用户开关。
+- `scripts/train.py` 目前固定为 `8` 个 worker、每个 worker `2` 个 env，因此 `--n-envs` 不是完全按字面生效的用户开关。
 
-## 列出 run
+## 列出 Run
 
 ```powershell
 python scripts/list_runs.py --limit 20
@@ -154,7 +161,7 @@ python tools/replay_record.py --list
 
 ## Reward 可视化
 
-把 reward TOML 生成为 Markdown 表格：
+把 reward TOML 生成成 Markdown 表格：
 
 ```powershell
 python tools/cli.py reward-table --reward configs/reward.toml
@@ -219,7 +226,7 @@ python -m pytest tests/test_cpp_reward_events.py -q
 python -m pytest tests/test_cpp_direction_pattern_lookup.py -q
 ```
 
-通过 CLI 跑测试或调试案例：
+通过 CLI 跑测试或调试样例：
 
 ```powershell
 gmkt test

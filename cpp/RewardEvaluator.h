@@ -21,7 +21,6 @@ struct RewardResult {
     double step_penalty = 0.0;
     double double_live_three_bonus = 0.0;
     double block_winning_bonus = 0.0;
-    double block_live_four_bonus = 0.0;
     double block_live_three_bonus = 0.0;
     double unresolved_winning_threat_penalty = 0.0;
     double unresolved_four_threat_penalty = 0.0;

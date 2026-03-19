@@ -87,6 +87,28 @@ def reset_env_state(env_id: int, board):
     _backend.reset_env_state(env_id, board)
 
 
+def restore_env_state(env_id: int, board, black_counts, white_counts, done: bool, winner: int):
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    _backend.restore_env_state(env_id, board, black_counts, white_counts, done, winner)
+
+
+def generate_rush_four_opening_group(group_count: int = 1, seed: int = 0):
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    return list(_backend.generate_rush_four_opening_group(group_count, seed))
+
+
+def write_rush_four_opening_group(
+    output_path: str = "outputs/build/precompute/rush_four_group.json",
+    group_count: int = 1,
+    seed: int = 0,
+):
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    _backend.write_rush_four_opening_group(output_path, group_count, seed)
+
+
 def clear_env_state(env_id: int):
     if _backend is None:
         raise RuntimeError("C++ backend is not available")
@@ -109,6 +131,12 @@ def env_winner(env_id: int) -> int:
     if _backend is None:
         raise RuntimeError("C++ backend is not available")
     return int(_backend.env_winner(env_id))
+
+
+def infer_next_player(board) -> int:
+    if _backend is None:
+        raise RuntimeError("C++ backend is not available")
+    return int(_backend.infer_next_player(board))
 
 
 def list_state_values():

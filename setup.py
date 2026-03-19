@@ -51,6 +51,7 @@ ext_modules = [
             str(ROOT / "cpp" / "direction_encoding.cpp"),
             str(ROOT / "cpp" / "utils" / "direction_pattern_lookup.cpp"),
             str(ROOT / "cpp" / "precompute" / "DirectionDeltaTable.cpp"),
+            str(ROOT / "cpp" / "precompute" / "RushFourDataset.cpp"),
         ],
         include_dirs=[pybind11.get_include()],
         language="c++",
