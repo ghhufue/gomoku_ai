@@ -60,3 +60,13 @@ capabilities = [
 ]
 candidate_radius = 2
 top_k = 1
+
+[bots.trained_latest]
+kind = "trained"
+model_path = "runs/20260318_234628/final_model.pt"
+aliases = ["trained", "ai", "ppo"]
+capabilities = [
+  "PPO trained neural network",
+  "full board evaluation",
+  "greedy policy inference",
+]

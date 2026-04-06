@@ -7,6 +7,7 @@ from bots.base import Bot
 from bots.classic_rule_bot import ClassicRuleBot
 from bots.random_bot import RandomBot
 from bots.reward_driven_bot import RewardDrivenBot
+from bots.trained_bot import TrainedBot  # 新增
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BOT_CONFIG_PATH = ROOT / "configs" / "bots.toml"
@@ -65,6 +66,9 @@ def create_bot(
         return ClassicRuleBot(candidate_radius=int(payload.get("candidate_radius", 2)))
     if kind == "random":
         return RandomBot()
+    if kind == "trained":  # 新增
+        model_path = ROOT / str(payload["model_path"])
+        return TrainedBot(model_path=model_path)
     raise ValueError(f"unsupported bot kind: {kind}")
 
 
