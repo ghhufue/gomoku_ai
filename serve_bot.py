@@ -14,13 +14,11 @@ class BotRequest(BaseModel):
     current_player: int
     bot_name: str = "classic_rule"
     bot_difficulty: str | None = None
-    model_path: str | None = None  # 新增：动态指定模型路径
+    model_path: str | None = None
 
 @app.post("/bot_move")
 def bot_move(req: BotRequest):
     board = np.array(req.board, dtype=np.int8)
-
-    # 如果传了 model_path，直接加载那个模型
     if req.model_path:
         bot = TrainedBot(model_path=req.model_path)
     else:
