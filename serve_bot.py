@@ -33,7 +33,7 @@ def bot_move(req: BotRequest):
 
 @app.get("/list_runs")
 def list_runs():
-    """列出所有可用的训练模型"""
+    """列出所有可训练模型"""
     runs_dir = Path(__file__).parent / "runs"
     models = []
     if runs_dir.exists():

@@ -7,7 +7,7 @@ from bots.base import Bot
 from bots.classic_rule_bot import ClassicRuleBot
 from bots.random_bot import RandomBot
 from bots.reward_driven_bot import RewardDrivenBot
-from bots.trained_bot import TrainedBot  # 新增
+from bots.trained_bot import TrainedBot  # new
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BOT_CONFIG_PATH = ROOT / "configs" / "bots.toml"
