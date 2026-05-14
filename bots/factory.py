@@ -60,11 +60,15 @@ def create_bot(
         return RewardDrivenBot(
             candidate_radius=int(payload.get("candidate_radius", 2)),
             top_k=int(payload.get("top_k", 1)),
+            name=resolved_name,
         )
     if kind == "classic_rule":
-        return ClassicRuleBot(candidate_radius=int(payload.get("candidate_radius", 2)))
+        return ClassicRuleBot(
+            candidate_radius=int(payload.get("candidate_radius", 2)),
+            name=resolved_name,
+        )
     if kind == "random":
-        return RandomBot()
+        return RandomBot(name=resolved_name)
     raise ValueError(f"unsupported bot kind: {kind}")
 
 

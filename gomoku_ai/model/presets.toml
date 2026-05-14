@@ -1,13 +1,13 @@
 [presets.small]
 channels = 48
-blocks = 3
+blocks = 4
 policy_channels = 2
 value_channels = 1
 value_hidden_dim = 96
 
 [presets.base]
 channels = 64
-blocks = 4
+blocks = 6
 policy_channels = 2
 value_channels = 1
 value_hidden_dim = 128

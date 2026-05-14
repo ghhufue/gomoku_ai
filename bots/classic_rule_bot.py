@@ -9,7 +9,8 @@ from gomoku_ai.env import EMPTY
 
 
 class ClassicRuleBot(Bot):
-    def __init__(self, candidate_radius: int = 2, thread_batch_size: int = 10):
+    def __init__(self, candidate_radius: int = 2, thread_batch_size: int = 10, name: str = "classic_rule"):
+        super().__init__(name=name)
         self.candidate_radius = max(1, int(candidate_radius))
         self.thread_batch_size = max(1, int(thread_batch_size))
 

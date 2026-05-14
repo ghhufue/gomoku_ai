@@ -9,6 +9,7 @@ from gomoku_ai.env import (
     BOARD_SIZE,
     EMPTY,
     GomokuEnv,
+    WHITE,
     classify_move,
     classify_move_counts,
     coord_to_action,
@@ -94,11 +95,14 @@ def test_env_illegal_move_ends_episode() -> None:
 
 
 def test_env_reports_win_before_opponent_turn() -> None:
+    from gomoku_ai.cpp_backend import reset_env_state
+
     env = GomokuEnv(opponent=StaticOpponent(coord_to_action(0, 0)), seed=1)
     env.agent_player = BLACK
     env.done = False
     env.board.fill(EMPTY)
     place_many(env.board, [(7, 3, BLACK), (7, 4, BLACK), (7, 5, BLACK), (7, 6, BLACK)])
+    reset_env_state(env.env_id, env.board)
 
     result = env.step(coord_to_action(7, 7))
 
@@ -137,3 +141,131 @@ def test_reward_driven_bot_can_be_constructed() -> None:
     bot = create_bot(name="reward_driven_hard")
 
     assert bot is not None
+
+
+# === 4-channel observation tests ===
+
+def test_observation_has_4_channels() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    obs, _ = env.reset()
+    assert obs.shape == (4, 15, 15), f"Expected (4, 15, 15), got {obs.shape}"
+
+
+def test_observation_channel_0_is_current_player_stones() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    env.board.fill(EMPTY)
+    env.board[7, 7] = env.agent_player
+    env.board[3, 3] = -env.agent_player
+    obs = env.observation()
+    assert obs[0, 7, 7] == 1.0, "Channel 0 should mark current player's stone"
+    assert obs[0, 3, 3] == 0.0, "Channel 0 should not mark opponent's stone"
+
+
+def test_observation_channel_1_is_opponent_stones() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    env.board.fill(EMPTY)
+    env.board[7, 7] = env.agent_player
+    env.board[3, 3] = -env.agent_player
+    obs = env.observation()
+    assert obs[1, 3, 3] == 1.0, "Channel 1 should mark opponent's stone"
+    assert obs[1, 7, 7] == 0.0, "Channel 1 should not mark current player's stone"
+
+
+def test_observation_channel_2_last_move_all_zeros_on_first_move() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    env.board.fill(EMPTY)
+    env.last_move = None
+    obs = env.observation()
+    assert np.all(obs[2] == 0.0), "Channel 2 should be all zeros when no last move"
+
+
+def test_observation_channel_2_last_move_after_agent_move() -> None:
+    env = GomokuEnv(opponent=StaticOpponent(coord_to_action(0, 0)), seed=42)
+    env.board.fill(EMPTY)
+    env.done = False
+    env.agent_player = BLACK
+    env.last_move = None
+    from gomoku_ai.cpp_backend import reset_env_state
+
+    reset_env_state(env.env_id, env.board)
+    # place a stone that would lead to a continuing game
+    result = env.step(coord_to_action(7, 7))
+    if not result.done:
+        # last_move should be the opponent's move (7,7 was agent, then opponent moved)
+        obs = env.observation()
+        assert obs[2].sum() == 1.0, "Channel 2 should have exactly one 1.0 for last move"
+        # The last_move should be the opponent's position
+
+
+def test_observation_channel_3_is_black_constant_plane() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    env.board.fill(EMPTY)
+    env.agent_player = BLACK
+    obs = env.observation()
+    assert np.all(obs[3] == 1.0), "Channel 3 should be all 1.0 for black player"
+
+    env.agent_player = WHITE
+    obs = env.observation()
+    assert np.all(obs[3] == 0.0), "Channel 3 should be all 0.0 for white player"
+
+
+def test_observation_maintains_player_perspective_after_switch() -> None:
+    env = GomokuEnv(opponent=create_bot(name="random"), seed=42)
+    env.board.fill(EMPTY)
+    env.board[7, 7] = BLACK
+    env.board[3, 3] = WHITE
+
+    # From BLACK's perspective
+    env.agent_player = BLACK
+    obs = env.observation()
+    assert obs[0, 7, 7] == 1.0, "BLACK's stones should be in channel 0"
+    assert obs[1, 3, 3] == 1.0, "WHITE's stones should be in channel 1"
+
+    # From WHITE's perspective
+    env.agent_player = WHITE
+    obs = env.observation()
+    assert obs[0, 3, 3] == 1.0, "WHITE's stones should be in channel 0"
+    assert obs[1, 7, 7] == 1.0, "BLACK's stones should be in channel 1"
+
+
+# === Reward scaling tests ===
+
+def test_terminal_reward_is_scaled() -> None:
+    from gomoku_ai.env import TERMINAL_WIN_REWARD, TERMINAL_LOSS_REWARD
+
+    assert TERMINAL_WIN_REWARD == 1.0
+    assert TERMINAL_LOSS_REWARD == -1.0
+
+
+def test_env_step_info_contains_reward_breakdown() -> None:
+    env = GomokuEnv(opponent=StaticOpponent(coord_to_action(0, 0)), seed=42)
+    env.board.fill(EMPTY)
+    env.done = False
+    env.agent_player = BLACK
+    env.last_move = None
+    from gomoku_ai.cpp_backend import reset_env_state
+
+    reset_env_state(env.env_id, env.board)
+    result = env.step(coord_to_action(7, 7))
+
+    assert "terminal_reward" in result.info, "info should contain terminal_reward"
+    assert "raw_auxiliary_reward" in result.info, "info should contain raw_auxiliary_reward"
+
+
+# === Opponent pool tests ===
+
+def test_opponent_pool_switches_bots() -> None:
+    bots = [create_bot(name="random"), create_bot(name="reward_driven_hard")]
+    weights = [0.5, 0.5]
+    env = GomokuEnv(
+        opponent=create_bot(name="random"),
+        seed=42,
+        opponent_pool=bots,
+        opponent_weights=weights,
+    )
+    # Reset a few times and check that opponent changes
+    seen_names = set()
+    for _ in range(10):
+        obs, mask = env.reset()
+        seen_names.add(env.opponent.name)
+    assert len(seen_names) > 1, f"Expected multiple bots, got {seen_names}"

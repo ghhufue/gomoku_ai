@@ -20,10 +20,11 @@ from gomoku_ai.model import (
     ModelConfig,
     model_config_from_checkpoint_payload,
     model_preset_config,
+    validate_checkpoint_channels,
 )
 from gomoku_ai.ppo import PPOConfig, PPOTrainer
 from gomoku_ai.run_registry import update_registry
-from scripts.evaluate import evaluate_across_seeds
+from scripts.evaluate import evaluate_across_seeds, evaluate_strength
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,8 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--show-progress", type=str, default=None)
     parser.add_argument("--bot", type=str, default=None)
     parser.add_argument("--bot-difficulty", type=str, default=None)
+    parser.add_argument("--opponent-pool", type=str, nargs="*", default=None)
+    parser.add_argument("--opponent-weights", type=float, nargs="*", default=None)
     parser.add_argument("--reset-state-path", type=Path, default=None)
     parser.add_argument("--reset-state-prob", type=float, default=None)
+    parser.add_argument("--reward-config", type=Path, default=Path("configs/reward.toml"),
+                        help="Path to reward config TOML (C++ scores + PPO scaling).")
+    parser.add_argument("--eval-config", type=Path, default=Path("configs/eval.toml"),
+                        help="Path to evaluation config TOML (standard eval + strength eval).")
     return parser
 
 
@@ -299,12 +306,31 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
 
 
 def format_update_message(stats: dict[str, float]) -> str:
+    coef = stats.get("auxiliary_coef", 0)
+    terminal = stats.get("terminal_reward", 0)
+    raw_aux = stats.get("raw_auxiliary_reward", 0)
     return (
-        "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.2f} "
-        "wins={wins} losses={losses} draws={draws} policy_loss={policy_loss:.4f} "
+        "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.4f} "
+        "wins={wins} losses={losses} draws={draws} "
+        "term={terminal:.4f} raw_aux={raw_aux:.2f} coef={coef:.4f} "
+        "policy_loss={policy_loss:.4f} "
         "value_loss={value_loss_weighted:.4f} entropy={entropy:.4f} "
         "rollout={rollout_time_s:.1f}s optimize={optimize_time_s:.1f}s fps={samples_per_sec:.1f}"
-    ).format(**stats)
+    ).format(terminal=terminal, raw_aux=raw_aux, coef=coef, **stats)
+
+
+def resolve_dynamic_weights(score: float, tiers: list[dict]) -> list[float] | None:
+    """Return the opponent weights for the given strength score.
+
+    Tiers are sorted by score_max ascending. The first tier with
+    score < score_max is used. Returns None if tiers is empty.
+    """
+    if not tiers:
+        return None
+    for tier in tiers:
+        if score < tier["score_max"]:
+            return tier["weights"]
+    return tiers[-1]["weights"]
 
 
 def append_jsonl(path: Path, payload: dict[str, object]) -> None:
@@ -368,12 +394,33 @@ def main() -> None:
     raw_config = load_config(args.config)
     runtime = raw_config["runtime"]
     training = raw_config["training"]
-    evaluation = raw_config["evaluation"]
     opponent_config = raw_config.get("opponent", {})
+    opponent_dynamic = opponent_config.get("dynamic", {})
     artifacts = raw_config["artifacts"]
+
+    # Parse dynamic opponent tiers
+    dynamic_tiers: list[dict] = []
+    if opponent_dynamic.get("enabled", False):
+        for tier in opponent_dynamic.get("tiers", []):
+            dynamic_tiers.append({
+                "score_max": float(tier["score_max"]),
+                "weights": [float(w) for w in tier["weights"]],
+            })
+        dynamic_tiers.sort(key=lambda t: t["score_max"])
     checkpoint_policy = raw_config["checkpoint"]
     model_preset = str(args.model_preset or raw_config.get("model", {}).get("preset", "base")).lower()
     model_config = build_model_config(raw_config.get("model"), args)
+
+    # Load external eval config
+    eval_config_path = args.eval_config.resolve()
+    eval_raw = load_config(eval_config_path) if eval_config_path.exists() else {}
+    evaluation = eval_raw.get("evaluation", raw_config.get("evaluation", {}))
+    eval_strength = evaluation.get("strength", {})
+
+    # Load external reward config
+    reward_config_path = args.reward_config.resolve()
+    reward_raw = load_config(reward_config_path) if reward_config_path.exists() else {}
+    reward_scaling = reward_raw.get("reward", {}).get("scaling", raw_config.get("reward", {}))
     config: dict[str, dict] = {
         "runtime": {
             "device": args.device or runtime["device"],
@@ -384,7 +431,7 @@ def main() -> None:
             "start_new_branch": parse_bool_flag(args.start_new_branch, default=bool(runtime.get("start_new_branch", False))),
         },
         "training": {
-            "n_envs": int(args.n_envs if args.n_envs is not None else training["n_envs"]),
+            "n_envs": int(args.n_envs if args.n_envs is not None else training.get("n_envs", 0)),
             "n_steps": int(args.n_steps if args.n_steps is not None else training["n_steps"]),
             "updates": int(args.updates if args.updates is not None else training["updates"]),
             "batch_size": int(args.batch_size if args.batch_size is not None else training["batch_size"]),
@@ -406,15 +453,34 @@ def main() -> None:
         },
         "model": {"preset": model_preset, **model_config.to_dict()},
         "evaluation": {
-            "eval_every": int(args.eval_every if args.eval_every is not None else evaluation["eval_every"]),
-            "eval_games": int(args.eval_games if args.eval_games is not None else evaluation["eval_games"]),
-            "eval_seeds": int(args.eval_seeds if args.eval_seeds is not None else evaluation["eval_seeds"]),
+            "eval_every": int(args.eval_every if args.eval_every is not None else evaluation.get("eval_every", 10)),
+            "eval_games": int(args.eval_games if args.eval_games is not None else evaluation.get("eval_games", 20)),
+            "eval_seeds": int(args.eval_seeds if args.eval_seeds is not None else evaluation.get("eval_seeds", 3)),
+            "strength_enabled": bool(eval_strength.get("enabled", False)),
+            "strength_every": int(eval_strength.get("eval_every", 50)),
+            "strength_bots": list(eval_strength.get("bots", ["random", "classic_rule", "reward_driven_medium", "reward_driven_hard"])),
+            "strength_games_per_bot": list(eval_strength.get("games_per_bot", [20, 20, 20, 20])),
+            "strength_weights": list(eval_strength.get("difficulty_weights", [1.0, 2.0, 4.0, 8.0])),
+            "strength_seed": int(eval_strength.get("seed", 12345)),
+            "save_best_by_strength": bool(eval_strength.get("save_best_by_strength", False)),
         },
         "opponent": {
             "bot_name": str(args.bot if args.bot is not None else opponent_config.get("bot_name", "reward_driven_hard")),
             "bot_difficulty": str(
                 args.bot_difficulty if args.bot_difficulty is not None else opponent_config.get("bot_difficulty", "")
             ),
+            "opponent_pool_names": list(
+                args.opponent_pool
+                if args.opponent_pool is not None
+                else opponent_config.get("opponent_pool_names", [])
+            ),
+            "opponent_pool_weights": list(
+                args.opponent_weights
+                if args.opponent_weights is not None
+                else opponent_config.get("opponent_pool_weights", [])
+            ),
+            "dynamic_enabled": bool(opponent_dynamic.get("enabled", False)),
+            "dynamic_initial_score": float(opponent_dynamic.get("initial_score", 5.0)),
         },
         "artifacts": {
             "tensorboard_dir": str(artifacts["tensorboard_dir"]),
@@ -441,9 +507,10 @@ def main() -> None:
         raise ValueError("worker_processes must be positive")
     if config["training"]["envs_per_worker"] <= 0:
         raise ValueError("envs_per_worker must be positive")
-    config["training"]["n_envs"] = (
-        config["training"]["worker_processes"] * config["training"]["envs_per_worker"]
-    )
+    if config["training"]["n_envs"] <= 0:
+        config["training"]["n_envs"] = (
+            config["training"]["worker_processes"] * config["training"]["envs_per_worker"]
+        )
     reset_states: tuple[dict[str, object], ...] = ()
     if config["training"]["reset_state_prob"] < 0.0 or config["training"]["reset_state_prob"] > 1.0:
         raise ValueError("reset_state_prob must be between 0 and 1")
@@ -463,6 +530,8 @@ def main() -> None:
             "bot_difficulty": config["opponent"]["bot_difficulty"],
             "reset_states": reset_states,
             "reset_state_prob": config["training"]["reset_state_prob"],
+            "opponent_pool_names": config["opponent"]["opponent_pool_names"] or None,
+            "opponent_pool_weights": config["opponent"]["opponent_pool_weights"] or None,
         }
         for idx in range(config["training"]["n_envs"])
     ]
@@ -482,6 +551,13 @@ def main() -> None:
         device=device,
         show_progress=config["training"]["show_progress"],
     )
+    # Apply reward config from reward.toml [reward.scaling]
+    if reward_scaling:
+        ppo_config.auxiliary_reward_scale = float(reward_scaling.get("auxiliary_reward_scale", 0.001))
+        ppo_config.auxiliary_reward_clip = float(reward_scaling.get("auxiliary_reward_clip", 1.0))
+        ppo_config.auxiliary_coef_start = float(reward_scaling.get("auxiliary_coef_start", 0.1))
+        ppo_config.auxiliary_coef_end = float(reward_scaling.get("auxiliary_coef_end", 0.0))
+        ppo_config.auxiliary_coef_anneal_updates = int(reward_scaling.get("auxiliary_coef_anneal_updates", 5000))
     layout["run_dir"].mkdir(parents=True, exist_ok=True)
     layout["log_dir"].mkdir(parents=True, exist_ok=True)
     layout["checkpoint_dir"].mkdir(parents=True, exist_ok=True)
@@ -489,13 +565,17 @@ def main() -> None:
     writer = SummaryWriter(log_dir=str(layout["log_dir"]))
     trainer = PPOTrainer(model=model, env=env, config=ppo_config, writer=writer)
     best_eval: dict[str, float] | None = None
+    best_strength: dict | None = None
+    current_dynamic_weights: list[float] | None = None
     history_tail: list[dict[str, float]] = []
     best_model_path = layout["checkpoint_dir"] / config["checkpoint"]["best_model_name"]
+    best_strength_model_path = layout["checkpoint_dir"] / "best_strength_model.pt"
     latest_metrics_path = layout["latest_eval_path"]
     updates_jsonl_path = layout["history_dir"] / "updates.jsonl"
     updates_csv_path = layout["history_dir"] / "updates.csv"
     updates_log_path = layout["history_dir"] / "updates.log"
     evals_jsonl_path = layout["history_dir"] / "evals.jsonl"
+    strength_evals_jsonl_path = layout["history_dir"] / "strength_evals.jsonl"
     strategy_path = layout["history_dir"] / "training_strategy.json"
     start_update = 0
     write_history_strategy(strategy_path, config, layout)
@@ -524,8 +604,17 @@ def main() -> None:
     }
     persist_run_metadata(layout, manifest)
 
+    # Initialize dynamic opponent weights at training start
+    if config["opponent"]["dynamic_enabled"] and dynamic_tiers:
+        init_score = config["opponent"]["dynamic_initial_score"]
+        current_dynamic_weights = resolve_dynamic_weights(init_score, dynamic_tiers)
+        if current_dynamic_weights is not None:
+            env.set_opponent_weights(current_dynamic_weights)
+            print(f"dynamic opponent init: score={init_score} -> weights={current_dynamic_weights}")
+
     if config["runtime"]["resume_from"] is not None:
         resume_payload = torch.load(config["runtime"]["resume_from"], map_location=trainer.config.device)
+        validate_checkpoint_channels(resume_payload, expected_input_channels=model_config.input_channels)
         resume_model_config = model_config_from_checkpoint_payload(resume_payload)
         if resume_model_config != model.config:
             model = ActorCriticNet(resume_model_config).to(device)
@@ -549,7 +638,7 @@ def main() -> None:
         persist_run_metadata(layout, manifest)
 
     def on_update_end(update: int, stats: dict[str, float], current_model: ActorCriticNet) -> None:
-        nonlocal best_eval
+        nonlocal best_eval, best_strength, current_dynamic_weights
         history_tail.append(stats)
         del history_tail[:-10]
         manifest["last_update"] = update
@@ -652,6 +741,85 @@ def main() -> None:
                 print(f"updated best model: {best_model_path}")
             persist_run_metadata(layout, manifest)
 
+        # Strength evaluation
+        eval_cfg = config["evaluation"]
+        if (eval_cfg["strength_enabled"]
+                and eval_cfg["strength_every"] > 0
+                and update % eval_cfg["strength_every"] == 0):
+            print(f"running strength evaluation at update {update}...")
+            current_model.eval()
+            checkpoint_path_for_strength = layout["checkpoint_dir"] / f"checkpoint_update_{update:04d}.pt"
+            strength_result = evaluate_strength(
+                model=current_model,
+                device=device,
+                checkpoint_path=checkpoint_path_for_strength if checkpoint_path_for_strength.exists() else layout["save_path"],
+                bots=eval_cfg["strength_bots"],
+                games_per_bot=eval_cfg["strength_games_per_bot"],
+                difficulty_weights=eval_cfg["strength_weights"],
+                seed=eval_cfg["strength_seed"],
+                verbose=True,
+            )
+            current_model.train()
+            strength_result["update"] = float(update)
+            strength_result["ep_rew_mean"] = stats["ep_rew_mean"]
+            
+            # Log to TensorBoard
+            writer.add_scalar("strength/normalized_score", strength_result["normalized_strength_score_0_100"], update)
+            writer.add_scalar("strength/raw_score", strength_result["raw_strength_score"], update)
+            writer.add_scalar("strength/overall_win_rate", strength_result["overall_win_rate"], update)
+            writer.flush()
+            
+            # Save to history
+            append_jsonl(
+                strength_evals_jsonl_path,
+                {
+                    "recorded_at": datetime.now().isoformat(timespec="seconds"),
+                    "strength_eval": strength_result,
+                },
+            )
+            print(
+                f"strength update={update} raw={strength_result['raw_strength_score']:.4f} "
+                f"norm={strength_result['normalized_strength_score_0_100']:.2f}"
+            )
+
+            # Dynamic opponent weight adjustment
+            if config["opponent"]["dynamic_enabled"] and dynamic_tiers:
+                score = strength_result["normalized_strength_score_0_100"]
+                new_weights = resolve_dynamic_weights(score, dynamic_tiers)
+                if new_weights is not None and new_weights != current_dynamic_weights:
+                    current_dynamic_weights = new_weights
+                    env.set_opponent_weights(new_weights)
+                    print(
+                        f"dynamic opponent: score={score:.1f} -> weights={new_weights}"
+                    )
+                    writer.add_scalar("opponent/dynamic_score", score, update)
+
+            # Save best by strength
+            if eval_cfg.get("save_best_by_strength", False):
+                is_better_strength = (
+                    best_strength is None
+                    or strength_result["normalized_strength_score_0_100"]
+                    > best_strength["normalized_strength_score_0_100"]
+                )
+                if is_better_strength:
+                    best_strength = strength_result
+                    save_checkpoint(
+                        model=current_model,
+                        optimizer=trainer.optimizer,
+                        config=ppo_config,
+                        path=best_strength_model_path,
+                        seed=config["runtime"]["seed"],
+                        history_tail=history_tail,
+                        update=update,
+                        model_config=current_model.config,
+                        extra={"strength_eval": strength_result, "train_stats": stats},
+                    )
+                    manifest["best_strength"] = best_strength
+                    manifest["paths"]["best_strength_model"] = str(best_strength_model_path)
+                    print(f"updated best strength model: {best_strength_model_path}")
+            
+            persist_run_metadata(layout, manifest)
+
     history = trainer.train(start_update=start_update, on_update_end=on_update_end)
     writer.close()
 
@@ -670,6 +838,7 @@ def main() -> None:
     manifest["status"] = "completed"
     manifest["last_update"] = start_update + config["training"]["updates"]
     manifest["best_eval"] = best_eval
+    manifest["best_strength"] = best_strength
     manifest["paths"]["final_model"] = str(layout["save_path"]) if config["checkpoint"]["keep_final_model"] else None
     persist_run_metadata(layout, manifest)
     if config["checkpoint"]["keep_final_model"]:

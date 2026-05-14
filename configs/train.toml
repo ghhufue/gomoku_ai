@@ -1,5 +1,7 @@
 # Gomoku PPO 训练配置文件
-# 这个文件统一控制运行参数、训练超参数、评估策略、checkpoint 保留策略，以及 reward 奖惩权重。
+# 统一控制运行参数、训练超参数、checkpoint 保留策略。
+# Reward → --reward-config (默认 configs/reward.toml)
+# 评估   → --eval-config   (默认 configs/eval.toml)
 
 [runtime]
 # 训练设备。设为 "auto" 时优先使用 CUDA，否则回退到 CPU。
@@ -22,15 +24,9 @@ resume_from = ""
 # true: 以该 checkpoint 为起点，在新的 run 目录中继续训练。
 start_new_branch = false
 
-# reward 配置文件路径。将奖惩策略单独放到独立 TOML 中维护。
-reward_config = "configs/reward.toml"
-
 [training]
-# 每次 PPO rollout 使用的并行环境数量。
-n_envs = 8
-
 # 采样使用的 worker 进程数。实际总环境数 = worker_processes * envs_per_worker。
-worker_processes = 8
+worker_processes = 12
 
 # 每个 worker 进程内部创建的环境数。
 envs_per_worker = 2
@@ -39,11 +35,11 @@ envs_per_worker = 2
 n_steps = 128
 
 # 本次执行要跑多少次 PPO update。
-# 如果是恢复训练，这里表示“额外再跑多少次”，不是总 update 数。
-updates = 400
+# 如果是恢复训练，这里表示"额外再跑多少次"，不是总 update 数。
+updates = 4000
 
 # PPO 小批量大小。
-batch_size = 256
+batch_size = 384
 
 # 每次 PPO update 内部的优化轮数。
 epochs = 4
@@ -56,15 +52,16 @@ show_progress = true
 
 [model]
 # 可选: small / base / large / custom。
-# 只有 preset = "custom" 时，下面这些显式参数才会生效；
-# 否则会直接使用预设参数。
 preset = "base"
+
+# 模型输入通道数。4 通道: 当前玩家棋子、对手棋子、上一手落点、当前玩家是否为黑棋。
+input_channels = 4
 
 # 共享主干通道数。增大后主干和两个 head 的参数量都会上升。
 channels = 64
 
 # 残差块数量。增大后主干深度和参数量上升。
-blocks = 4
+blocks = 6
 
 # policy head 的 1x1 卷积输出通道数。
 policy_channels = 2
@@ -75,19 +72,55 @@ value_channels = 1
 # value head 隐藏层宽度。
 value_hidden_dim = 128
 
-[evaluation]
-# 每隔多少个 update 做一次评估。设为 0 表示关闭周期性评估。
-eval_every = 10
-
-# 每个评估 seed 下对战的局数。
-eval_games = 20
-
-# 联合评估时使用多少个不同 seed。
-eval_seeds = 3
-
 [opponent]
+# 默认对手 bot 名称。
 bot_name = "reward_driven_hard"
+
+# 默认对手 bot 难度（为空时使用 bot_name）。
 bot_difficulty = ""
+
+# === 对手池配置 ===
+# 训练时从池中按权重随机选择对手。
+# 为空表示只使用 bot_name 指定的固定对手。
+opponent_pool_names = ["random", "classic_rule", "reward_driven_medium", "reward_driven_hard"]
+
+# 初始权重。当 dynamic.enabled=true 时，权重会被动态调整覆盖。
+opponent_pool_weights = [0.4, 0.4, 0.15, 0.05]
+
+# === 动态对手 ===
+# 根据棋力评分自动调整各 bot 出现概率。
+# 评分来源：最近一次 strength evaluation 的 normalized_strength_score_0_100。
+[opponent.dynamic]
+enabled = true
+
+# 分数段 → 各 bot 出现概率。
+# score 范围为 [0, 100]，分段左闭右开。
+# 当前分数落在某段时使用该段的 weights。
+# 设计原则：低分段多给简单 bot，但随着分数提高提前引入少量更难 bot，
+# 确保模型在能稳定打败某级 bot 之前就已经接触过更难的对手。
+
+[[opponent.dynamic.tiers]]
+score_max = 10
+weights = [0.50, 0.40, 0.08, 0.02]
+
+[[opponent.dynamic.tiers]]
+score_max = 25
+weights = [0.20, 0.35, 0.30, 0.15]
+
+[[opponent.dynamic.tiers]]
+score_max = 45
+weights = [0.05, 0.20, 0.40, 0.35]
+
+[[opponent.dynamic.tiers]]
+score_max = 70
+weights = [0.00, 0.10, 0.35, 0.55]
+
+[[opponent.dynamic.tiers]]
+score_max = 100
+weights = [0.00, 0.05, 0.20, 0.75]
+
+# 初始 tier 的 score 值。训练刚开始时还没有 strength eval 结果，使用此值。
+initial_score = 5.0
 
 [artifacts]
 # run 目录下用于保存 TensorBoard 日志的相对目录名。

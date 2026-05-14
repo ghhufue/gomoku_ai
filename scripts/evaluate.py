@@ -28,7 +28,7 @@ PLAYER_LABEL = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate a Gomoku PPO checkpoint against a configured bot, or run bot vs bot.")
     parser.add_argument("--checkpoint", type=Path, default=None)
-    parser.add_argument("--games", type=int, default=50)
+    parser.add_argument("--games", type=int, default=1)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--num-seeds", type=int, default=1)
@@ -47,6 +47,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--export-visual", action="store_true", default=True, help="Export visual JSON payload.")
     parser.add_argument("--no-export-visual", action="store_false", dest="export_visual", help="Disable visual JSON export.")
     parser.add_argument("--quiet-games", action="store_true", help="Suppress per-game logs.")
+    # Strength evaluation mode
+    parser.add_argument("--mode", type=str, default="standard", choices=["standard", "strength"],
+                        help="Evaluation mode: standard (single bot) or strength (multi-bot rating).")
+    parser.add_argument("--strength-bots", type=str, nargs="*",
+                        default=["random", "classic_rule", "reward_driven_medium", "reward_driven_hard"],
+                        help="Bots to evaluate against in strength mode.")
+    parser.add_argument("--strength-games-per-bot", type=int, nargs="*",
+                        default=[20, 20, 20, 20],
+                        help="Number of games per bot in strength mode.")
+    parser.add_argument("--strength-weights", type=float, nargs="*",
+                        default=[1.0, 2.0, 4.0, 8.0],
+                        help="Difficulty weights for each bot in strength mode.")
+    parser.add_argument("--strength-seed", type=int, default=12345,
+                        help="Base seed for strength evaluation.")
+    parser.add_argument("--strength-output-json", type=Path, default=None,
+                        help="Path to append strength evaluation JSONL result.")
     return parser
 
 
@@ -522,6 +538,164 @@ def print_summary(metrics: dict[str, float]) -> None:
     print(f"avg_steps={metrics['avg_steps']:.2f}")
 
 
+def evaluate_strength(
+    model: ActorCriticNet,
+    device: str,
+    checkpoint_path: Path,
+    bots: list[str],
+    games_per_bot: list[int],
+    difficulty_weights: list[float],
+    seed: int,
+    verbose: bool = True,
+) -> dict:
+    """Evaluate model strength against a pool of bots.
+    
+    Returns a dict with per-bot results, raw_strength_score, 
+    and normalized_strength_score_0_100.
+    """
+    if len(bots) != len(games_per_bot) or len(bots) != len(difficulty_weights):
+        raise ValueError(
+            f"bots ({len(bots)}), games_per_bot ({len(games_per_bot)}), "
+            f"difficulty_weights ({len(difficulty_weights)}) must have same length"
+        )
+
+    was_training = model.training
+    model.eval()
+    total_games = sum(games_per_bot)
+    total_wins = 0
+    total_losses = 0
+    total_draws = 0
+    total_illegal = 0
+    total_steps = 0
+    
+    bot_results: list[dict] = []
+    raw_strength_score = 0.0
+    total_weight = sum(difficulty_weights)
+    
+    current_seed = seed
+    
+    for bot_name, games, weight in zip(bots, games_per_bot, difficulty_weights):
+        bot_wins = 0
+        bot_losses = 0
+        bot_draws = 0
+        bot_illegal = 0
+        bot_steps = 0
+        
+        for game_idx in range(games):
+            game = play_game(
+                model=model,
+                device=device,
+                seed=current_seed + game_idx,
+                bot_name=bot_name,
+                verbose=False,
+                include_record=False,
+            )
+            outcome = game["result"]
+            if outcome == "win":
+                bot_wins += 1
+            elif outcome == "loss":
+                bot_losses += 1
+            else:
+                bot_draws += 1
+            if game.get("illegal_move"):
+                bot_illegal += 1
+            bot_steps += int(game["num_moves"])
+        
+        current_seed += games
+        g = float(games)
+        win_rate = bot_wins / g if g > 0 else 0.0
+        draw_rate = bot_draws / g if g > 0 else 0.0
+        loss_rate = bot_losses / g if g > 0 else 0.0
+        result_rate = win_rate + 0.5 * draw_rate
+        contribution = result_rate * weight
+        raw_strength_score += contribution
+        
+        bot_result = {
+            "bot": bot_name,
+            "games": int(g),
+            "wins": bot_wins,
+            "draws": bot_draws,
+            "losses": bot_losses,
+            "illegal_moves": bot_illegal,
+            "win_rate": round(win_rate, 4),
+            "draw_rate": round(draw_rate, 4),
+            "loss_rate": round(loss_rate, 4),
+            "result_rate": round(result_rate, 4),
+            "difficulty_weight": weight,
+            "contribution_score": round(contribution, 4),
+            "avg_steps": round(bot_steps / max(1, g), 2),
+        }
+        bot_results.append(bot_result)
+        
+        total_wins += bot_wins
+        total_losses += bot_losses
+        total_draws += bot_draws
+        total_illegal += bot_illegal
+        total_steps += bot_steps
+        
+        if verbose:
+            print(
+                f"  bot={bot_name:25s} games={int(g):3d} win={win_rate:.3f} "
+                f"draw={draw_rate:.3f} loss={loss_rate:.3f} "
+                f"result_rate={result_rate:.3f} weight={weight:.1f} "
+                f"contrib={contribution:.3f}"
+            )
+    
+    normalized_score = 100.0 * raw_strength_score / total_weight if total_weight > 0 else 0.0
+    
+    result = {
+        "checkpoint": str(checkpoint_path),
+        "total_games": total_games,
+        "total_wins": total_wins,
+        "total_losses": total_losses,
+        "total_draws": total_draws,
+        "total_illegal_moves": total_illegal,
+        "overall_win_rate": round(total_wins / max(1, total_games), 4),
+        "overall_draw_rate": round(total_draws / max(1, total_games), 4),
+        "overall_loss_rate": round(total_losses / max(1, total_games), 4),
+        "avg_steps": round(total_steps / max(1, total_games), 2),
+        "bot_results": bot_results,
+        "raw_strength_score": round(raw_strength_score, 4),
+        "normalized_strength_score_0_100": round(normalized_score, 2),
+        "seed": seed,
+        "difficulty_weights": difficulty_weights,
+    }
+    
+    if was_training:
+        model.train()
+    return result
+
+
+def print_strength_report(result: dict) -> None:
+    """Print a formatted strength evaluation report."""
+    print()
+    print("=" * 70)
+    print("  STRENGTH EVALUATION REPORT")
+    print("=" * 70)
+    print(f"  Checkpoint: {result['checkpoint']}")
+    print(f"  Total games: {result['total_games']}")
+    print(f"  Overall: W={result['total_wins']} D={result['total_draws']} "
+          f"L={result['total_losses']} "
+          f"win_rate={result['overall_win_rate']:.3f} "
+          f"illegal={result['total_illegal_moves']}")
+    print("-" * 70)
+    print(f"  {'Bot':<25s} {'G':>4s} {'Win%':>7s} {'Draw%':>7s} {'Loss%':>7s} "
+          f"{'Rate':>7s} {'Wgt':>5s} {'Contrib':>8s}")
+    print("-" * 70)
+    for br in result["bot_results"]:
+        print(
+            f"  {br['bot']:<25s} {br['games']:>4d} {br['win_rate']:>7.3f} "
+            f"{br['draw_rate']:>7.3f} {br['loss_rate']:>7.3f} "
+            f"{br['result_rate']:>7.3f} {br['difficulty_weight']:>5.1f} "
+            f"{br['contribution_score']:>8.3f}"
+        )
+    print("-" * 70)
+    print(f"  Raw Strength Score:      {result['raw_strength_score']:.4f}")
+    print(f"  Normalized (0-100):      {result['normalized_strength_score_0_100']:.2f}")
+    print("=" * 70)
+    print()
+
+
 def is_bot_vs_bot_mode(args: argparse.Namespace) -> bool:
     return args.checkpoint is None and args.bot_a is not None and args.bot_b is not None
 
@@ -603,6 +777,51 @@ def main(argv: list[str] | None = None) -> None:
     checkpoint_path, warning = resolve_checkpoint(args.checkpoint)
     if warning is not None:
         print(f"warning: {warning}")
+    
+    if args.mode == "strength":
+        # Strength evaluation mode
+        print("mode=strength")
+        model = load_model_from_checkpoint(checkpoint_path, device)
+        bots = args.strength_bots
+        games_per_bot = args.strength_games_per_bot
+        weights = args.strength_weights
+        # Pad/truncate to match bot count
+        if len(games_per_bot) < len(bots):
+            games_per_bot = games_per_bot + [20] * (len(bots) - len(games_per_bot))
+        if len(weights) < len(bots):
+            weights = weights + [1.0] * (len(bots) - len(weights))
+        games_per_bot = games_per_bot[:len(bots)]
+        weights = weights[:len(bots)]
+        
+        result = evaluate_strength(
+            model=model,
+            device=device,
+            checkpoint_path=checkpoint_path,
+            bots=bots,
+            games_per_bot=games_per_bot,
+            difficulty_weights=weights,
+            seed=args.strength_seed,
+            verbose=True,
+        )
+        print_strength_report(result)
+        
+        if args.strength_output_json is not None:
+            output_path = Path(args.strength_output_json)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("a", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+                f.write("\n")
+            print(f"strength result appended to: {output_path}")
+        
+        if args.export_record:
+            export_dir = build_export_session_dir(args.output_dir.resolve(), checkpoint_path)
+            # Also save strength result to export dir
+            strength_path = export_dir / "strength_eval.json"
+            strength_path.parent.mkdir(parents=True, exist_ok=True)
+            strength_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+            print(f"saved: {strength_path}")
+        return
+
     model = load_model_from_checkpoint(checkpoint_path, device)
     metrics = evaluate_across_seeds(
         model=model,

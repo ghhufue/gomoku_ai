@@ -20,7 +20,13 @@ except ModuleNotFoundError:  # pragma: no cover - optional training dependency
         return iterable
 
 
-REWARD_COMPONENT_KEYS = ("total_reward",)
+REWARD_COMPONENT_KEYS = (
+    "total_reward",
+    "terminal_reward",
+    "raw_auxiliary_reward",
+    "scaled_auxiliary_reward",
+    "final_reward",
+)
 
 
 @dataclass
@@ -39,6 +45,12 @@ class PPOConfig:
     epochs: int = 4
     device: str = "cpu"
     show_progress: bool = True
+    # Reward scaling config
+    auxiliary_reward_scale: float = 0.001
+    auxiliary_reward_clip: float = 1.0
+    auxiliary_coef_start: float = 0.1
+    auxiliary_coef_end: float = 0.0
+    auxiliary_coef_anneal_updates: int = 5000
 
 
 def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
@@ -60,13 +72,29 @@ def accumulate_reward_component_stats(
     count: int,
 ) -> tuple[dict[str, float], int]:
     for info in infos:
-        reward_components = info.get("reward_components")
-        if not isinstance(reward_components, dict):
-            continue
-        for key in REWARD_COMPONENT_KEYS:
-            totals[key] += float(reward_components.get(key, 0.0))
+        totals["terminal_reward"] += float(info.get("terminal_reward", 0.0))
+        totals["raw_auxiliary_reward"] += float(info.get("raw_auxiliary_reward", 0.0))
+        scaled_aux = float(info.get("scaled_auxiliary_reward", 0.0))
+        totals["scaled_auxiliary_reward"] += scaled_aux
+        totals["final_reward"] += float(info.get("final_reward", 0.0))
         count += 1
     return totals, count
+
+
+def compute_auxiliary_coef(update: int, config: PPOConfig) -> float:
+    """Compute the auxiliary reward coefficient for the given update number.
+    
+    Linear annealing from auxiliary_coef_start to auxiliary_coef_end.
+    """
+    denom = max(1, config.auxiliary_coef_anneal_updates)
+    progress = min(float(update) / denom, 1.0)
+    return config.auxiliary_coef_start + progress * (config.auxiliary_coef_end - config.auxiliary_coef_start)
+
+
+def scale_auxiliary_reward(raw_aux: float, config: PPOConfig) -> float:
+    """Scale and clip the raw auxiliary reward."""
+    scaled = raw_aux * config.auxiliary_reward_scale
+    return float(np.clip(scaled, -config.auxiliary_reward_clip, config.auxiliary_reward_clip))
 
 
 class RolloutBuffer:
@@ -124,7 +152,7 @@ class RolloutBuffer:
 
         returns = advantages + values
         return {
-            "obs": np.asarray(self.obs, dtype=np.float32).reshape(-1, 3, 15, 15),
+            "obs": np.asarray(self.obs, dtype=np.float32).reshape(-1, 4, 15, 15),
             "masks": np.asarray(self.masks, dtype=bool).reshape(-1, 225),
             "actions": np.asarray(self.actions, dtype=np.int64).reshape(-1),
             "log_probs": np.asarray(self.log_probs, dtype=np.float32).reshape(-1),
@@ -153,8 +181,15 @@ class PPOTrainer:
         finished_rewards = np.zeros(self.config.n_envs, dtype=np.float32)
         finished_lengths = np.zeros(self.config.n_envs, dtype=np.int32)
         stats = {"wins": 0, "losses": 0, "draws": 0}
+        # Per-bot statistics
+        bot_stats: dict[str, dict[str, float]] = {}
         reward_component_totals = init_reward_component_stats()
         reward_component_count = 0
+        
+        # Compute fixed auxiliary_coef for this rollout
+        auxiliary_coef = compute_auxiliary_coef(update, self.config)
+        stats["auxiliary_coef"] = auxiliary_coef
+        
         iterator = range(self.config.n_steps)
         if self.config.show_progress:
             iterator = tqdm(
@@ -172,6 +207,18 @@ class PPOTrainer:
                 actions, log_probs, values = self.model.sample_action(obs_tensor, mask_tensor)
 
             next_obs, next_masks, rewards, dones, infos = self.env.step(actions.cpu().numpy())
+            
+            # Apply reward scaling: final_reward = terminal + auxiliary_coef * scaled_aux
+            scaled_rewards = np.zeros_like(rewards)
+            for idx, (r, info) in enumerate(zip(rewards, infos)):
+                terminal = float(info.get("terminal_reward", 0.0))
+                raw_aux = float(info.get("raw_auxiliary_reward", r - terminal))
+                scaled_aux = scale_auxiliary_reward(raw_aux, self.config)
+                final_reward = terminal + auxiliary_coef * scaled_aux
+                scaled_rewards[idx] = final_reward
+                info["scaled_auxiliary_reward"] = scaled_aux
+                info["final_reward"] = final_reward
+            
             reward_component_totals, reward_component_count = accumulate_reward_component_stats(
                 reward_component_totals,
                 infos,
@@ -182,12 +229,12 @@ class PPOTrainer:
                 masks,
                 actions.cpu().numpy(),
                 log_probs.cpu().numpy(),
-                rewards,
+                scaled_rewards.astype(np.float32),
                 dones,
                 values.cpu().numpy(),
             )
 
-            finished_rewards += rewards
+            finished_rewards += scaled_rewards
             finished_lengths += 1
             for idx, done in enumerate(dones):
                 if done:
@@ -195,12 +242,22 @@ class PPOTrainer:
                     finished_rewards[idx] = 0.0
                     finished_lengths[idx] = 0
                     result = infos[idx].get("agent_result")
+                    bot_name = str(infos[idx].get("opponent_bot", "unknown"))
+                    if bot_name not in bot_stats:
+                        bot_stats[bot_name] = {"games": 0, "wins": 0, "losses": 0, "draws": 0, 
+                                                "total_reward": 0.0, "total_length": 0.0}
+                    bot_stats[bot_name]["games"] += 1
+                    bot_stats[bot_name]["total_reward"] += float(finished_rewards[idx])
+                    bot_stats[bot_name]["total_length"] += float(finished_lengths[idx])
                     if result == "win":
                         stats["wins"] += 1
+                        bot_stats[bot_name]["wins"] += 1
                     elif result == "loss":
                         stats["losses"] += 1
+                        bot_stats[bot_name]["losses"] += 1
                     elif result == "draw" or infos[idx].get("draw"):
                         stats["draws"] += 1
+                        bot_stats[bot_name]["draws"] += 1
 
             obs, masks = next_obs, next_masks
 
@@ -214,6 +271,16 @@ class PPOTrainer:
         stats["episodes"] = len(episode_rewards)
         for key, total in reward_component_totals.items():
             stats[key] = total / max(1, reward_component_count)
+        # Compute per-bot summary stats
+        for bot_name, bstats in bot_stats.items():
+            g = bstats["games"]
+            if g > 0:
+                stats[f"bot_{bot_name}_games"] = g
+                stats[f"bot_{bot_name}_win_rate"] = bstats["wins"] / g
+                stats[f"bot_{bot_name}_draw_rate"] = bstats["draws"] / g
+                stats[f"bot_{bot_name}_loss_rate"] = bstats["losses"] / g
+                stats[f"bot_{bot_name}_avg_reward"] = bstats["total_reward"] / g
+                stats[f"bot_{bot_name}_avg_length"] = bstats["total_length"] / g
         return data, obs, masks, stats
 
     def update(self, rollout: dict[str, np.ndarray]) -> dict[str, float]:
@@ -321,8 +388,11 @@ class PPOTrainer:
             history.append(stats)
             self.log_stats(update, stats)
             message = (
-                "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.2f} "
-                "wins={wins} losses={losses} draws={draws} policy_loss={policy_loss:.4f} "
+                "update={update} episodes={episodes} ep_rew_mean={ep_rew_mean:.4f} "
+                "wins={wins} losses={losses} draws={draws} "
+                "terminal={terminal_reward:.4f} raw_aux={raw_auxiliary_reward:.2f} "
+                "scaled_aux={scaled_auxiliary_reward:.4f} coef={auxiliary_coef:.4f} "
+                "policy_loss={policy_loss:.4f} "
                 "value_loss={value_loss_weighted:.4f} entropy={entropy:.4f} "
                 "rollout={rollout_time_s:.1f}s optimize={optimize_time_s:.1f}s fps={samples_per_sec:.1f}"
             ).format(**stats)
@@ -356,7 +426,12 @@ class PPOTrainer:
         self.writer.add_scalar("policy/entropy", stats["entropy"], update)
         self.writer.add_scalar("policy/approx_kl", stats["approx_kl"], update)
         self.writer.add_scalar("policy/clip_fraction", stats["clip_fraction"], update)
-        self.writer.add_scalar("reward/total_reward", stats["total_reward"], update)
+        self.writer.add_scalar("reward/total_reward", stats.get("total_reward", 0), update)
+        self.writer.add_scalar("reward/terminal_reward", stats.get("terminal_reward", 0), update)
+        self.writer.add_scalar("reward/raw_auxiliary_reward", stats.get("raw_auxiliary_reward", 0), update)
+        self.writer.add_scalar("reward/scaled_auxiliary_reward", stats.get("scaled_auxiliary_reward", 0), update)
+        self.writer.add_scalar("reward/final_reward", stats.get("final_reward", 0), update)
+        self.writer.add_scalar("reward/auxiliary_coef", stats.get("auxiliary_coef", 0), update)
         self.writer.add_scalar("train/learning_rate", self.optimizer.param_groups[0]["lr"], update)
         self.writer.add_scalar("perf/rollout_time_s", stats["rollout_time_s"], update)
         self.writer.add_scalar("perf/optimize_time_s", stats["optimize_time_s"], update)

@@ -8,7 +8,7 @@ def test_cli_evaluate_defaults() -> None:
     args = parser.parse_args(["evaluate"])
 
     assert args.command == "evaluate"
-    assert args.bot == "rule"
+    assert args.bot == "reward_driven_hard"
     assert str(args.output_dir).endswith("outputs\\evaluation") or str(args.output_dir).endswith("outputs/evaluation")
     assert args.export_record is True
     assert args.export_text is True

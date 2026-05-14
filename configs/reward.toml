@@ -1,3 +1,8 @@
+# Gomoku PPO Reward 配置文件
+# 包含 C++ 棋形状态分值、特殊奖惩项和 PPO 训练时使用的缩放参数。
+
+# === C++ 棋形状态分值 ===
+# 这些值被 C++ RewardEvaluator 直接使用，计算每步的 offense_score / defense_score。
 [reward.state_scores]
 live_one = 0.5
 sleep_one = 0.2
@@ -29,6 +34,7 @@ dead_four_gap1 = 0.0
 
 five = 1000.0
 
+# === C++ 特殊奖惩项 ===
 [reward.special]
 step_penalty = -1.0
 double_live_three_bonus = 100.0
@@ -38,3 +44,26 @@ unresolved_winning_threat_penalty = 300.0
 unresolved_four_threat_penalty = 300.0
 unresolved_live_three_fatal_penalty = 200.0
 missed_immediate_win_penalty = 150.0
+
+# === PPO 训练 Reward 缩放 ===
+# 这些值在 C++ 评估之后，由 PPO trainer 使用。
+[reward.scaling]
+# 终局胜负奖励。
+terminal_win = 1.0
+terminal_loss = -1.0
+terminal_draw = 0.0
+
+# 辅助棋形 reward 缩放系数。原始 C++ reward × 此值后 clip。
+auxiliary_reward_scale = 0.0005
+
+# 辅助 reward clip 范围。防止极端值破坏 PPO 训练。
+auxiliary_reward_clip = 1.0
+
+# 辅助 reward 系数起始值（训练初期）。
+auxiliary_coef_start = 0.1
+
+# 辅助 reward 系数结束值（训练后期，通常为 0.0）。
+auxiliary_coef_end = 0.0
+
+# 辅助系数从 start 线性衰减到 end 所需的总 update 数。
+auxiliary_coef_anneal_updates = 5000

@@ -61,10 +61,12 @@ def test_build_export_session_dir_wraps_output_dir() -> None:
 
 
 def test_exported_match_record_is_replay_compatible(tmp_path) -> None:
+    games = [sample_game(123, 7, 5)]
+    checkpoint_path = Path("runs/demo/final_model.pt")
+    payload = build_match_payload(checkpoint_path, "cpu", games)
     output_paths = export_match_outputs(
-        checkpoint_path=Path("runs/demo/final_model.pt"),
-        device="cpu",
-        games=[sample_game(123, 7, 5)],
+        payload=payload,
+        games=games,
         output_dir=tmp_path,
         filename="match_record",
         export_text=True,

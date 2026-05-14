@@ -11,7 +11,7 @@ from torch.distributions import Categorical
 
 BOARD_SIZE = 15
 BOARD_AREA = BOARD_SIZE * BOARD_SIZE
-OBS_CHANNELS = 3
+OBS_CHANNELS = 4
 PRESETS_PATH = Path(__file__).with_name("presets.toml")
 
 
@@ -35,6 +35,7 @@ MODEL_PRESETS = tuple((*MODEL_PRESET_CONFIGS.keys(), CUSTOM_MODEL_PRESET))
 
 @dataclass(frozen=True)
 class ModelConfig:
+    input_channels: int = 4
     channels: int = 64
     blocks: int = 4
     policy_channels: int = 2
@@ -84,7 +85,7 @@ class ActorCriticNet(nn.Module):
         super().__init__()
         self.config = config or ModelConfig()
         trunk = [
-            nn.Conv2d(OBS_CHANNELS, self.config.channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(self.config.input_channels, self.config.channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(self.config.channels),
             nn.ReLU(inplace=True),
         ]
@@ -153,7 +154,9 @@ def model_config_from_checkpoint_payload(payload: dict) -> ModelConfig:
 
 
 def infer_model_config_from_state_dict(model_state: dict[str, torch.Tensor]) -> ModelConfig:
-    channels = int(model_state["trunk.0.weight"].shape[0])
+    first_conv_weight = model_state.get("trunk.0.weight")
+    channels = int(first_conv_weight.shape[0]) if first_conv_weight is not None else ModelConfig().channels
+    input_channels = int(first_conv_weight.shape[1]) if first_conv_weight is not None else ModelConfig().input_channels
     residual_indices = {
         int(name.split(".")[1])
         for name in model_state
@@ -164,9 +167,46 @@ def infer_model_config_from_state_dict(model_state: dict[str, torch.Tensor]) -> 
     value_channels = int(model_state["value_head.0.weight"].shape[0])
     value_hidden_dim = int(model_state["value_head.3.weight"].shape[0])
     return ModelConfig(
+        input_channels=input_channels,
         channels=channels,
         blocks=blocks,
         policy_channels=policy_channels,
         value_channels=value_channels,
         value_hidden_dim=value_hidden_dim,
     )
+
+
+def validate_checkpoint_channels(payload: dict, expected_input_channels: int = 4) -> None:
+    """Validate checkpoint input channels compatibility.
+    
+    Raises ValueError with a clear message if the checkpoint uses an 
+    incompatible number of input channels.
+    """
+    model_state = payload.get("model_state_dict")
+    first_conv = None
+    if isinstance(model_state, dict):
+        first_conv = model_state.get("trunk.0.weight")
+    
+    ckpt_channels = None
+    if first_conv is not None:
+        ckpt_channels = int(first_conv.shape[1])
+    
+    if ckpt_channels is None:
+        # Try to infer from model_config metadata
+        extra = payload.get("extra") or {}
+        model_cfg = extra.get("model_config", {}) if isinstance(extra, dict) else {}
+        ckpt_channels = model_cfg.get("input_channels", None)
+    
+    if ckpt_channels is None:
+        # Cannot determine, assume compatible
+        return
+    
+    if ckpt_channels != expected_input_channels:
+        raise ValueError(
+            f"Checkpoint input_channels mismatch: "
+            f"checkpoint has {ckpt_channels} channels, "
+            f"but current model expects {expected_input_channels} channels. "
+            f"Cannot load a {ckpt_channels}-channel checkpoint into a {expected_input_channels}-channel model. "
+            f"Please use a checkpoint trained with the same input_channel configuration, "
+            f"or start a new training run."
+        )

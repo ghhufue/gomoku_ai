@@ -32,6 +32,12 @@ WHITE = -1
 DIRS = ((1, 0), (0, 1), (1, 1), (1, -1))
 
 TERMINAL_REWARD = 1000.0
+# New reward scaling: terminal = ±1.0 for PPO, auxiliary = scaled raw reward
+TERMINAL_WIN_REWARD = 1.0
+TERMINAL_LOSS_REWARD = -1.0
+TERMINAL_DRAW_REWARD = 0.0
+AUXILIARY_REWARD_SCALE = 0.001
+AUXILIARY_REWARD_CLIP = 1.0
 ANALYZE_RADIUS = 5
 ANALYZE_CENTER = ANALYZE_RADIUS
 ANALYZE_WINDOW_SPANS = tuple(
@@ -379,12 +385,19 @@ class GomokuEnv:
         seed: int | None = None,
         reset_states: tuple[dict[str, object], ...] | None = None,
         reset_state_prob: float = 0.0,
+        opponent_pool: list | None = None,
+        opponent_weights: list[float] | None = None,
     ):
+        self._opponent_pool = opponent_pool
+        self._opponent_weights = (
+            np.asarray(opponent_weights, dtype=np.float32) if opponent_weights is not None else None
+        )
         self.opponent = opponent
         self.rng = np.random.default_rng(seed)
         self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
         self.agent_player = BLACK
         self.done = False
+        self.last_move: int | None = None
         self.env_id = GomokuEnv._next_env_id
         GomokuEnv._next_env_id += 1
         self.reset_states = reset_states or ()
@@ -397,9 +410,25 @@ class GomokuEnv:
             except Exception:
                 pass
 
+    def _sample_opponent(self):
+        """Sample an opponent from the pool if configured."""
+        if self._opponent_pool is not None and self._opponent_weights is not None:
+            idx = int(self.rng.choice(len(self._opponent_pool), p=self._opponent_weights / self._opponent_weights.sum()))
+            self.opponent = self._opponent_pool[idx]
+
+    def set_opponent_weights(self, weights: list[float]) -> None:
+        """Update opponent sampling weights dynamically."""
+        if self._opponent_pool is None:
+            return
+        if len(weights) != len(self._opponent_pool):
+            raise ValueError(f"weights length {len(weights)} != pool size {len(self._opponent_pool)}")
+        self._opponent_weights = np.asarray(weights, dtype=np.float32)
+
     def reset(self) -> tuple[np.ndarray, np.ndarray]:
+        self._sample_opponent()
         self.board.fill(EMPTY)
         self.done = False
+        self.last_move = None
         if self.reset_states and self.reset_state_prob > 0.0 and self.rng.random() < self.reset_state_prob:
             state = self.reset_states[int(self.rng.integers(0, len(self.reset_states)))]
             self.board[:, :] = np.asarray(state["board"], dtype=np.int8)
@@ -421,6 +450,7 @@ class GomokuEnv:
             opening = call_bot_action(self.opponent, self.board.copy(), BLACK, self.rng)
             row, col = action_to_coord(opening)
             self.board[row, col] = BLACK
+            self.last_move = opening
 
         if CPP_BACKEND_AVAILABLE:
             cpp_reset_env_state(self.env_id, self.board)
@@ -429,10 +459,18 @@ class GomokuEnv:
 
     def observation(self) -> np.ndarray:
         current = self.agent_player
-        obs = np.zeros((3, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        obs = np.zeros((4, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)
+        # Channel 0: current player's stones
         obs[0] = (self.board == current).astype(np.float32)
+        # Channel 1: opponent's stones
         obs[1] = (self.board == -current).astype(np.float32)
-        obs[2] = (self.board == EMPTY).astype(np.float32)
+        # Channel 2: last move one-hot (all zeros if no last move)
+        if self.last_move is not None:
+            row, col = action_to_coord(self.last_move)
+            obs[2, row, col] = 1.0
+        # Channel 3: is-black constant plane
+        if current == BLACK:
+            obs[3] = 1.0
         return obs
 
     def action_mask(self) -> np.ndarray:
@@ -445,18 +483,26 @@ class GomokuEnv:
         row, col = action_to_coord(action)
         if not inside(row, col) or self.board[row, col] != EMPTY:
             self.done = True
+            obs = self.observation()
             return StepResult(
-                self.observation(),
+                obs,
                 self.action_mask(),
-                -TERMINAL_REWARD,
+                0.0,
                 True,
-                {"illegal_move": True, "agent_result": "loss"},
+                {
+                    "illegal_move": True,
+                    "agent_result": "loss",
+                    "terminal_reward": TERMINAL_LOSS_REWARD,
+                    "raw_auxiliary_reward": 0.0,
+                    "opponent_bot": getattr(self.opponent, "name", "unknown"),
+                },
             )
 
         reward_payload = cpp_evaluate_env_reward(self.env_id, row, col, self.agent_player)
-        reward = float(reward_payload["reward"])
+        raw_aux_reward = float(reward_payload["reward"])
         info = reward_payload
         self.board[row, col] = self.agent_player
+        self.last_move = action
         cpp_apply_env_move(self.env_id, row, col, self.agent_player)
 
         if cpp_env_done(self.env_id):
@@ -465,9 +511,14 @@ class GomokuEnv:
             if winner == self.agent_player:
                 info["winner"] = self.agent_player
                 info["agent_result"] = "win"
+                info["terminal_reward"] = TERMINAL_WIN_REWARD
             else:
                 info["draw"] = True
                 info["agent_result"] = "draw"
+                info["terminal_reward"] = TERMINAL_DRAW_REWARD
+            info["raw_auxiliary_reward"] = raw_aux_reward
+            info["opponent_bot"] = getattr(self.opponent, "name", "unknown")
+            reward = info["terminal_reward"] + raw_aux_reward
             return StepResult(self.observation(), self.action_mask(), reward, True, info)
 
         opponent_action = call_bot_action(self.opponent, self.board.copy(), -self.agent_player, self.rng)
@@ -478,6 +529,7 @@ class GomokuEnv:
             opponent_action = fallback
 
         self.board[opp_row, opp_col] = -self.agent_player
+        self.last_move = opponent_action  # update last_move to opponent's move
         cpp_apply_env_move(self.env_id, opp_row, opp_col, -self.agent_player)
         opp_patterns = classify_move(self.board, opp_row, opp_col, -self.agent_player)
         info["opponent_action"] = opponent_action
@@ -488,15 +540,23 @@ class GomokuEnv:
             if winner == -self.agent_player:
                 info["winner"] = -self.agent_player
                 info["agent_result"] = "loss"
+                info["terminal_reward"] = TERMINAL_LOSS_REWARD
+                info["raw_auxiliary_reward"] = raw_aux_reward
+                info["opponent_bot"] = getattr(self.opponent, "name", "unknown")
+                reward = info["terminal_reward"] + raw_aux_reward
                 return StepResult(
                     self.observation(),
                     self.action_mask(),
-                    reward - TERMINAL_REWARD,
+                    reward,
                     True,
                     info,
                 )
             info["draw"] = True
             info["agent_result"] = "draw"
+            info["terminal_reward"] = TERMINAL_DRAW_REWARD
+            info["raw_auxiliary_reward"] = raw_aux_reward
+            info["opponent_bot"] = getattr(self.opponent, "name", "unknown")
+            reward = info["terminal_reward"] + raw_aux_reward
             return StepResult(
                 self.observation(),
                 self.action_mask(),
@@ -505,6 +565,10 @@ class GomokuEnv:
                 info,
             )
 
+        info["terminal_reward"] = 0.0
+        info["raw_auxiliary_reward"] = raw_aux_reward
+        info["opponent_bot"] = getattr(self.opponent, "name", "unknown")
+        reward = raw_aux_reward
         return StepResult(self.observation(), self.action_mask(), reward, False, info)
 
 
@@ -516,16 +580,32 @@ def call_bot_action(opponent, board: np.ndarray, player: int, rng: np.random.Gen
     raise TypeError("opponent must implement next_action(board, player, rng) or select_action(board, player, rng)")
 
 
+def _build_opponent_pool(names: list[str] | None, weights: list[float] | None) -> tuple[list, list[float]] | None:
+    """Build opponent pool from bot names and weights. Returns None if no pool configured."""
+    if not names:
+        return None
+    from bots import create_bot
+
+    bots = [create_bot(name=n) for n in names]
+    if weights and len(weights) == len(names):
+        return bots, [float(w) for w in weights]
+    # uniform weights if not provided
+    return bots, [1.0 / len(names)] * len(names)
+
+
 def _subproc_vector_worker(connection, env_specs: list[dict]) -> None:
     from bots import create_bot
 
     envs = [
-        GomokuEnv(
+        (lambda pool=_build_opponent_pool(spec.get("opponent_pool_names"), spec.get("opponent_pool_weights")): 
+         GomokuEnv(
             opponent=create_bot(name=spec["bot_name"], difficulty=(spec["bot_difficulty"] or None)),
             seed=int(spec["seed"]),
             reset_states=tuple(spec.get("reset_states", ()) or ()),
             reset_state_prob=float(spec.get("reset_state_prob", 0.0)),
-        )
+            opponent_pool=pool[0] if pool is not None else None,
+            opponent_weights=pool[1] if pool is not None else None,
+        ))()
         for spec in env_specs
     ]
     try:
@@ -568,6 +648,12 @@ def _subproc_vector_worker(connection, env_specs: list[dict]) -> None:
 
             if command == "close":
                 break
+
+            if command == "set_weights":
+                for env in envs:
+                    env.set_opponent_weights(payload)
+                connection.send(True)
+                continue
 
             raise ValueError(f"unsupported worker command: {command}")
     finally:
@@ -682,6 +768,13 @@ class SubprocVectorEnv:
             if process.is_alive():
                 process.terminate()
                 process.join(timeout=1.0)
+
+    def set_opponent_weights(self, weights: list[float]) -> None:
+        """Broadcast new opponent weights to all worker processes."""
+        for parent in self.parents:
+            parent.send(("set_weights", weights))
+        for parent in self.parents:
+            parent.recv()  # wait for ack
 
     def __del__(self):
         try:

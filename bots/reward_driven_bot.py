@@ -39,7 +39,9 @@ class RewardDrivenBot(Bot):
         candidate_radius: int = 2,
         top_k: int = 1,
         thread_batch_size: int = 10,
+        name: str = "reward_driven",
     ):
+        super().__init__(name=name)
         self.candidate_radius = max(1, int(candidate_radius))
         self.top_k = max(1, int(top_k))
         self.thread_batch_size = max(1, int(thread_batch_size))

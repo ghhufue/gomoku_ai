@@ -1,0 +1,35 @@
+# Gomoku PPO 评估配置文件
+# 包含标准评估和棋力评分评估的所有参数。
+
+[evaluation]
+# 每隔多少个 update 做一次标准评估。设为 0 表示关闭。
+eval_every = 10
+
+# 每个评估 seed 下对战的局数。
+eval_games = 20
+
+# 联合评估时使用多少个不同 seed。
+eval_seeds = 3
+
+# === 棋力评分评估 ===
+[evaluation.strength]
+# 是否启用棋力评分评估。
+enabled = true
+
+# 每隔多少个 update 做一次棋力评分。
+eval_every = 50
+
+# 棋力评分对手列表。
+bots = ["random", "classic_rule", "reward_driven_medium", "reward_driven_hard"]
+
+# 每个 bot 的对局数。
+games_per_bot = [20, 20, 20, 20]
+
+# 每个 bot 的难度权重。
+difficulty_weights = [1.0, 2.0, 4.0, 8.0]
+
+# 棋力评分评估的随机种子（固定以保持可比性）。
+seed = 12345
+
+# 是否根据棋力评分保存 best model。
+save_best_by_strength = true

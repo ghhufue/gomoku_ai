@@ -73,15 +73,18 @@ def test_model_preset_config_supports_named_sizes() -> None:
     assert "custom" in MODEL_PRESETS
     assert model_preset_config("small") == ModelConfig(
         channels=48,
-        blocks=3,
+        blocks=4,
         policy_channels=2,
         value_channels=1,
         value_hidden_dim=96,
     )
-    assert model_preset_config("base") == ModelConfig()
+    assert model_preset_config("base") == ModelConfig(
+        channels=64,
+        blocks=6,
+    )
     assert model_preset_config("large") == ModelConfig(
         channels=128,
-        blocks=8,
+        blocks=10,
         policy_channels=4,
         value_channels=2,
         value_hidden_dim=256,
@@ -102,7 +105,7 @@ def test_build_model_config_uses_named_preset_without_toml_overrides() -> None:
 
     assert config == ModelConfig(
         channels=160,
-        blocks=8,
+        blocks=10,
         policy_channels=4,
         value_channels=2,
         value_hidden_dim=256,
