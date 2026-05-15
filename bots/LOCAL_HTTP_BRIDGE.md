@@ -55,11 +55,14 @@ Response:
 From `gomoku_ai/`:
 
 ```bash
-uvicorn bots.local_http_api:app --host 127.0.0.1 --port 8000
+python -m bots.local_http_api
 ```
 
-Godot's `LocalHttpMoveProvider` can then call:
+This starts the Bot bridge on port `8001`, separate from `local_inference_service`
+on port `8000`.
+
+Godot's `LocalHttpMoveProvider` calls Bot moves through:
 
 ```text
-http://127.0.0.1:8000/bot_move
+http://127.0.0.1:8001/bot_move
 ```

@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+import uvicorn
 
 from bots.local_http_bridge import LocalBotBridge, LocalBotBridgeError
 
@@ -54,3 +55,11 @@ def bot_move(request: BotMoveRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return result.to_godot_response()
+
+
+def main() -> None:
+    uvicorn.run("bots.local_http_api:app", host="127.0.0.1", port=8001, reload=False)
+
+
+if __name__ == "__main__":
+    main()
