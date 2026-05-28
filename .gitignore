@@ -1,0 +1,36 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Build artifacts
+outputs/
+build/
+dist/
+*.obj
+*.exp
+*.lib
+*.egg-info/
+gomoku_ai/*.pyd
+gomoku_ai/*.dll
+
+# Training artifacts
+artifacts/
+logs/
+checkpoints/
+runs/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

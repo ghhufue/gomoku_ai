@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "pybind11>=3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gomoku-ai"
+version = "0.1.0"
+description = "Teaching-oriented Gomoku PPO workshop"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pybind11>=3.0",
+    "pytest>=8.3",
+    "setuptools<81",
+    "tensorboard>=2.18",
+    "torch==2.10.0+cu128",
+    "tqdm>=4.67",
+]
+
+[tool.setuptools.packages.find]
+include = ["gomoku_ai*", "bots*"]
+
+[tool.setuptools.package-data]
+"gomoku_ai.model" = ["presets.toml"]

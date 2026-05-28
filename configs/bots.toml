@@ -1,0 +1,62 @@
+[defaults]
+registry_version = 1
+
+[difficulty.easy]
+bot = "random"
+label = "Easy"
+description = "Pure random legal moves. Suitable for smoke tests and initial learning."
+
+[difficulty.medium]
+bot = "classic_rule"
+label = "Medium"
+description = "Classic rule-scoring bot. Faster than reward-driven and suitable for training rollouts."
+
+[difficulty.hard]
+bot = "reward_driven_hard"
+label = "Hard"
+description = "Full local reward-driven bot. Strong baseline for PPO evaluation."
+
+[bots.random]
+kind = "random"
+difficulty = "easy"
+aliases = ["rand"]
+capabilities = [
+  "legal moves only",
+  "no board evaluation",
+  "max exploration",
+]
+
+[bots.classic_rule]
+kind = "classic_rule"
+difficulty = "medium"
+aliases = ["classic", "rule", "rule_bot", "heuristic"]
+capabilities = [
+  "local neighborhood search",
+  "simple handcrafted pattern scoring",
+  "fast defensive and offensive heuristics",
+]
+candidate_radius = 2
+
+[bots.reward_driven_medium]
+kind = "reward_driven"
+difficulty = "hard"
+aliases = ["reward_medium"]
+capabilities = [
+  "local neighborhood search",
+  "reward-based move scoring",
+  "stochastic top-k selection",
+]
+candidate_radius = 1
+top_k = 3
+
+[bots.reward_driven_hard]
+kind = "reward_driven"
+difficulty = "hard"
+aliases = ["reward_driven", "reward-driven", "hard"]
+capabilities = [
+  "local neighborhood search",
+  "reward-based move scoring",
+  "strong deterministic baseline",
+]
+candidate_radius = 2
+top_k = 1

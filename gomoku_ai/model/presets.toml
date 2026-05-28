@@ -1,0 +1,20 @@
+[presets.small]
+channels = 48
+blocks = 3
+policy_channels = 2
+value_channels = 1
+value_hidden_dim = 96
+
+[presets.base]
+channels = 64
+blocks = 4
+policy_channels = 2
+value_channels = 1
+value_hidden_dim = 128
+
+[presets.large]
+channels = 128
+blocks = 10
+policy_channels = 4
+value_channels = 2
+value_hidden_dim = 256
