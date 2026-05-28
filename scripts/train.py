@@ -33,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--resume-from", type=Path, default=None)
+    parser.add_argument(
+        "--init-from",
+        type=Path,
+        default=None,
+        help="Load model weights before PPO training without resuming optimizer state or update count.",
+    )
     parser.add_argument("--start-new-branch", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--n-envs", type=int, default=None)
@@ -302,6 +308,8 @@ def print_training_strategy(config: dict[str, dict], layout: dict[str, Path]) ->
             start_new_branch=runtime["start_new_branch"],
         )
     )
+    if runtime.get("init_from") is not None:
+        print(f"init: init_from={runtime['init_from']}")
     print("=========================")
 
 
@@ -428,6 +436,7 @@ def main() -> None:
             "run_root": Path(runtime["run_root"]).resolve(),
             "run_name": args.run_name if args.run_name is not None else (runtime["run_name"] or None),
             "resume_from": args.resume_from.resolve() if args.resume_from is not None else config_path(runtime["resume_from"]),
+            "init_from": args.init_from.resolve() if args.init_from is not None else None,
             "start_new_branch": parse_bool_flag(args.start_new_branch, default=bool(runtime.get("start_new_branch", False))),
         },
         "training": {
@@ -503,6 +512,8 @@ def main() -> None:
     torch.manual_seed(config["runtime"]["seed"])
     device = resolve_device(config["runtime"]["device"])
     config["runtime"]["device"] = device
+    if config["runtime"]["resume_from"] is not None and config["runtime"]["init_from"] is not None:
+        raise ValueError("--resume-from and --init-from are mutually exclusive")
     if config["training"]["worker_processes"] <= 0:
         raise ValueError("worker_processes must be positive")
     if config["training"]["envs_per_worker"] <= 0:
@@ -564,6 +575,18 @@ def main() -> None:
     layout["history_dir"].mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(log_dir=str(layout["log_dir"]))
     trainer = PPOTrainer(model=model, env=env, config=ppo_config, writer=writer)
+
+    if config["runtime"]["init_from"] is not None:
+        init_payload = torch.load(config["runtime"]["init_from"], map_location=device)
+        validate_checkpoint_channels(init_payload, expected_input_channels=model_config.input_channels)
+        init_model_config = model_config_from_checkpoint_payload(init_payload)
+        if init_model_config != model.config:
+            model = ActorCriticNet(init_model_config).to(device)
+            trainer = PPOTrainer(model=model, env=env, config=ppo_config, writer=writer)
+        trainer.model.load_state_dict(init_payload["model_state_dict"])
+        config["model"] = {"preset": "init_checkpoint", **init_model_config.to_dict()}
+        print(f"initialized model weights from {config['runtime']['init_from']}")
+
     best_eval: dict[str, float] | None = None
     best_strength: dict | None = None
     current_dynamic_weights: list[float] | None = None

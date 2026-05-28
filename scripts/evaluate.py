@@ -14,8 +14,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gomoku_ai.env import BLACK, BOARD_SIZE, GomokuEnv, WHITE, action_to_coord, call_bot_action
+from gomoku_ai.env import (
+    BLACK,
+    BOARD_SIZE,
+    GomokuEnv,
+    WHITE,
+    action_to_coord,
+    call_bot_action,
+)
 from gomoku_ai.model import ActorCriticNet, model_config_from_checkpoint_payload
+from gomoku_ai.opening import apply_random_opening_pairs_to_env, move_coord_payload
+from gomoku_ai.tactical_policy import select_tactical_search_action
 from bots import available_bots, available_difficulties, create_bot
 
 
@@ -47,6 +56,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--export-visual", action="store_true", default=True, help="Export visual JSON payload.")
     parser.add_argument("--no-export-visual", action="store_false", dest="export_visual", help="Disable visual JSON export.")
     parser.add_argument("--quiet-games", action="store_true", help="Suppress per-game logs.")
+    parser.add_argument(
+        "--opening-random-pairs",
+        type=int,
+        default=0,
+        help="Add this many random historical move pairs before each model game.",
+    )
+    parser.add_argument(
+        "--no-tactical-guard",
+        action="store_true",
+        help="Disable tactical search guard for model move selection.",
+    )
     # Strength evaluation mode
     parser.add_argument("--mode", type=str, default="standard", choices=["standard", "strength"],
                         help="Evaluation mode: standard (single bot) or strength (multi-bot rating).")
@@ -72,13 +92,26 @@ def resolve_device(requested: str) -> str:
     return requested
 
 
-def choose_action(model: ActorCriticNet, obs: np.ndarray, mask: np.ndarray, device: str) -> int:
+def choose_action(
+    model: ActorCriticNet,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    device: str,
+    board: np.ndarray | None = None,
+    current_player: int | None = None,
+    tactical_guard: bool = True,
+) -> tuple[int, str]:
     obs_tensor = torch.as_tensor(obs[None, ...], dtype=torch.float32, device=device)
     mask_tensor = torch.as_tensor(mask[None, ...], dtype=torch.bool, device=device)
     with torch.no_grad():
         dist, _ = model.masked_distribution(obs_tensor, mask_tensor)
-        action = torch.argmax(dist.logits, dim=-1)
-    return int(action.item())
+        logits = dist.logits.squeeze(0).detach().cpu().numpy()
+
+    if tactical_guard and board is not None and current_player is not None:
+        action, source, _ = select_tactical_search_action(board, current_player, logits)
+        return action, source
+
+    return int(np.argmax(logits)), "model"
 
 
 def build_opponent(bot_name: str, bot_difficulty: str | None = None):
@@ -151,6 +184,32 @@ def board_to_ascii(board: np.ndarray) -> str:
     return "\n".join(rows)
 
 
+def game_sequence_signature(game: dict[str, object], limit: int | None = None) -> tuple[tuple[object, ...], ...]:
+    moves = game.get("moves", [])
+    if limit is not None:
+        moves = moves[:limit]
+    return tuple(
+        (
+            move.get("player"),
+            move.get("row"),
+            move.get("col"),
+            move.get("source"),
+        )
+        for move in moves
+    )
+
+
+def sequence_diversity(games: list[dict[str, object]]) -> dict[str, int]:
+    if not games or not all("moves" in game for game in games):
+        return {}
+    return {
+        "games": len(games),
+        "unique_full_sequences": len({game_sequence_signature(game) for game in games}),
+        "unique_first_6_plies": len({game_sequence_signature(game, 6) for game in games}),
+        "unique_first_10_plies": len({game_sequence_signature(game, 10) for game in games}),
+    }
+
+
 def record_move(moves: list[dict[str, object]], player: int, action: int, source: str) -> None:
     row, col = action_to_coord(action)
     player_label = PLAYER_LABEL[player]
@@ -165,6 +224,15 @@ def record_move(moves: list[dict[str, object]], player: int, action: int, source
             "col": int(col),
         }
     )
+
+
+def record_opening_moves(moves: list[dict[str, object]], actions: list[int], first_player: int) -> None:
+    player = first_player
+    for action in actions:
+        payload = move_coord_payload(action, player, "random_opening")
+        payload["move_number"] = len(moves) + 1
+        moves.append(payload)
+        player = -player
 
 
 def detect_opening_action(board: np.ndarray, player: int) -> int | None:
@@ -183,6 +251,8 @@ def play_game(
     bot_difficulty: str | None = None,
     verbose: bool = True,
     include_record: bool = False,
+    tactical_guard: bool = True,
+    opening_random_pairs: int = 0,
 ) -> dict[str, object]:
     env = GomokuEnv(opponent=build_opponent(bot_name, bot_difficulty), seed=seed)
     obs, mask = env.reset()
@@ -196,15 +266,33 @@ def play_game(
         if opening_action is not None:
             record_move(moves, bot_player, opening_action, "bot")
 
+    opening_actions = apply_random_opening_pairs_to_env(env, opening_random_pairs, env.rng)
+    if opening_actions:
+        if include_record:
+            record_opening_moves(moves, opening_actions, agent_player)
+        obs = env.observation()
+        mask = env.action_mask()
+
     done = False
     result = None
     steps = 0
     total_reward = 0.0
+    tactical_guard_uses = 0
     while not done:
-        action = choose_action(model, obs, mask, device)
+        action, action_source = choose_action(
+            model,
+            obs,
+            mask,
+            device,
+            board=env.board,
+            current_player=agent_player,
+            tactical_guard=tactical_guard,
+        )
+        if action_source != "model":
+            tactical_guard_uses += 1
         result = env.step(action)
         if include_record:
-            record_move(moves, agent_player, action, "model")
+            record_move(moves, agent_player, action, action_source)
             opponent_action = result.info.get("opponent_action")
             if opponent_action is not None:
                 record_move(moves, bot_player, int(opponent_action), "bot")
@@ -233,6 +321,8 @@ def play_game(
         "winner": PLAYER_LABEL[result.info["winner"]] if "winner" in result.info else None,
         "total_reward": float(total_reward),
         "num_moves": len(moves) if include_record else int(steps),
+        "tactical_guard_uses": tactical_guard_uses,
+        "opening_random_pairs": int(opening_random_pairs),
     }
     if include_record:
         game["moves"] = moves
@@ -320,6 +410,8 @@ def evaluate_model(
     bot_name: str = "reward_driven_hard",
     bot_difficulty: str | None = None,
     verbose: bool = True,
+    tactical_guard: bool = True,
+    opening_random_pairs: int = 0,
 ) -> dict[str, float]:
     was_training = model.training
     model.eval()
@@ -339,6 +431,8 @@ def evaluate_model(
             bot_difficulty=bot_difficulty,
             verbose=verbose,
             include_record=False,
+            tactical_guard=tactical_guard,
+            opening_random_pairs=opening_random_pairs,
         )
         outcome = game["result"]
         if outcome == "win":
@@ -375,6 +469,8 @@ def evaluate_across_seeds(
     bot_name: str = "reward_driven_hard",
     bot_difficulty: str | None = None,
     verbose: bool = True,
+    tactical_guard: bool = True,
+    opening_random_pairs: int = 0,
 ) -> dict[str, float]:
     runs: list[dict[str, float]] = []
     for seed in seeds:
@@ -386,6 +482,8 @@ def evaluate_across_seeds(
             bot_name=bot_name,
             bot_difficulty=bot_difficulty,
             verbose=verbose,
+            tactical_guard=tactical_guard,
+            opening_random_pairs=opening_random_pairs,
         )
         metrics["seed"] = float(seed)
         runs.append(metrics)
@@ -418,6 +516,7 @@ def build_match_payload(checkpoint_path: Path, device: str, games: list[dict[str
         "checkpoint": str(checkpoint_path),
         "device": device,
         "bot_name": games[0].get("bot_name") if games else None,
+        "sequence_diversity": sequence_diversity(games),
         "games": games,
     }
     for index, game in enumerate(payload["games"], start=1):
@@ -547,6 +646,8 @@ def evaluate_strength(
     difficulty_weights: list[float],
     seed: int,
     verbose: bool = True,
+    tactical_guard: bool = True,
+    opening_random_pairs: int = 0,
 ) -> dict:
     """Evaluate model strength against a pool of bots.
     
@@ -589,6 +690,8 @@ def evaluate_strength(
                 bot_name=bot_name,
                 verbose=False,
                 include_record=False,
+                tactical_guard=tactical_guard,
+                opening_random_pairs=opening_random_pairs,
             )
             outcome = game["result"]
             if outcome == "win":
@@ -802,6 +905,8 @@ def main(argv: list[str] | None = None) -> None:
             difficulty_weights=weights,
             seed=args.strength_seed,
             verbose=True,
+            tactical_guard=not args.no_tactical_guard,
+            opening_random_pairs=args.opening_random_pairs,
         )
         print_strength_report(result)
         
@@ -831,6 +936,8 @@ def main(argv: list[str] | None = None) -> None:
         bot_name=args.bot,
         bot_difficulty=args.bot_difficulty,
         verbose=verbose,
+        tactical_guard=not args.no_tactical_guard,
+        opening_random_pairs=args.opening_random_pairs,
     )
     print_summary(metrics)
 
@@ -847,6 +954,8 @@ def main(argv: list[str] | None = None) -> None:
                         bot_difficulty=args.bot_difficulty,
                         verbose=False,
                         include_record=True,
+                        tactical_guard=not args.no_tactical_guard,
+                        opening_random_pairs=args.opening_random_pairs,
                     )
                 )
         export_dir = build_export_session_dir(args.output_dir.resolve(), checkpoint_path)

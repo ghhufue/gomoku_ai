@@ -32,6 +32,8 @@ from gomoku_ai.env import (
     neighboring_action_mask,
 )
 from gomoku_ai.model import ActorCriticNet, model_config_from_checkpoint_payload
+from gomoku_ai.opening import apply_random_opening_pairs_to_board
+from gomoku_ai.tactical_policy import select_tactical_search_action
 
 
 APP_TITLE = "Gomoku Policy Studio"
@@ -68,6 +70,7 @@ class PolicySnapshot:
     legal_mask: np.ndarray
     action: int
     value: float
+    source: str = "model"
 
 
 def player_name(player: int) -> str:
@@ -183,7 +186,7 @@ class PolicyViewer(tk.Tk):
         self.model: ActorCriticNet | None = None
         self.bot_name = bot_name
         self.bot = create_bot(name=bot_name)
-        self.rng = np.random.default_rng(20260525)
+        self.rng = np.random.default_rng()
 
         self.board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
         self.model_player = BLACK
@@ -195,6 +198,8 @@ class PolicyViewer(tk.Tk):
         self.checkpoint_var = tk.StringVar(value="No checkpoint loaded")
         self.bot_var = tk.StringVar(value=bot_name)
         self.side_var = tk.StringVar(value="black")
+        self.tactical_guard_var = tk.BooleanVar(value=True)
+        self.random_opening_var = tk.BooleanVar(value=True)
         self.policy_snapshot: PolicySnapshot | None = None
         self.heatmap_image: object | None = None
         self.move_log: list[str] = []
@@ -311,10 +316,23 @@ class PolicyViewer(tk.Tk):
             padx=(16, 0),
         )
 
+        ttk.Checkbutton(
+            controls,
+            text="Tactical guard",
+            variable=self.tactical_guard_var,
+            command=self.render,
+        ).grid(row=7, column=0, sticky="w", pady=(0, 10))
+        ttk.Checkbutton(
+            controls,
+            text="Random opening",
+            variable=self.random_opening_var,
+            command=self.reset_game,
+        ).grid(row=8, column=0, sticky="w", pady=(0, 10))
+
         ttk.Button(controls, text="Next move", style="Accent.TButton", command=self.next_step).grid(
-            row=7, column=0, sticky="ew", pady=(12, 8)
+            row=9, column=0, sticky="ew", pady=(12, 8)
         )
-        ttk.Button(controls, text="New game", command=self.reset_game).grid(row=8, column=0, sticky="ew")
+        ttk.Button(controls, text="New game", command=self.reset_game).grid(row=10, column=0, sticky="ew")
 
     def _build_snapshot_panel(self, parent: ttk.Frame) -> None:
         panel = ttk.Frame(parent, style="Card.TFrame", padding=14)
@@ -422,8 +440,31 @@ class PolicyViewer(tk.Tk):
         self.move_log = []
         if self.model_player != BLACK:
             self._play_bot_move()
+        if self.random_opening_var.get():
+            self._apply_random_opening_pair()
         self.status.set(f"{player_name(self.current_player)} to move")
         self.render()
+
+    def _apply_random_opening_pair(self) -> None:
+        first_player = self.current_player
+        before_last = self.last_move
+        last_move, next_player = apply_random_opening_pairs_to_board(
+            self.board,
+            1,
+            self.rng,
+            first_player=first_player,
+        )
+        if last_move is None:
+            self.last_move = before_last
+            return
+
+        player = first_player
+        # Reconstruct the two random moves from board state is not reliable, so log
+        # the opening as a compact marker instead of exact coordinates.
+        self.move_number += 2
+        self.move_log.append(f"{self.move_number - 1:02d}-{self.move_number:02d}. Random opening pair")
+        self.current_player = next_player
+        self.last_move = last_move
 
     def next_step(self) -> None:
         if self.done:
@@ -453,8 +494,18 @@ class PolicyViewer(tk.Tk):
         with torch.no_grad():
             dist, value = self.model.masked_distribution(obs_tensor, mask_tensor)
             probs = dist.probs.squeeze(0).detach().cpu().numpy().astype(np.float64)
+            logits = dist.logits.squeeze(0).detach().cpu().numpy().astype(np.float64)
             action = int(np.argmax(probs))
-        return PolicySnapshot(probabilities=probs, legal_mask=mask.astype(bool), action=action, value=float(value.item()))
+        source = "model"
+        if self.tactical_guard_var.get():
+            action, source, _ = select_tactical_search_action(self.board, self.current_player, logits)
+        return PolicySnapshot(
+            probabilities=probs,
+            legal_mask=mask.astype(bool),
+            action=action,
+            value=float(value.item()),
+            source=source,
+        )
 
     def _play_bot_move(self) -> None:
         action = call_bot_action(self.bot, self.board.copy(), self.current_player, self.rng)
@@ -690,12 +741,13 @@ class PolicyViewer(tk.Tk):
             best_prob = snapshot.probabilities[snapshot.action] * 100.0
             self.decision_label.configure(
                 text=f"Move ({best_row:02d}, {best_col:02d}) with {best_prob:.2f}% probability. "
-                f"Value estimate {snapshot.value:+.4f}; entropy {entropy:.4f}."
+                f"Value estimate {snapshot.value:+.4f}; entropy {entropy:.4f}; source {snapshot.source}."
             )
             lines = [
                 f"value   {snapshot.value:+.4f}",
                 f"entropy {entropy:.4f}",
                 f"best    ({best_row:02d}, {best_col:02d})  {best_prob:6.2f}%",
+                f"source  {snapshot.source}",
                 "scale   blue < cyan < yellow < red",
                 "",
             ]
