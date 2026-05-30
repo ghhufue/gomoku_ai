@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -31,8 +32,10 @@ public:
 
 private:
     void ensureLoaded();
+    void loadFromFileUnlocked(const std::string& path);
 
     std::vector<PackedDirectionDeltaEntry> table_{};
+    mutable std::mutex mutex_{};
 };
 
 std::uint32_t encode_full_direction_side_cells(

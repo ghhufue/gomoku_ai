@@ -105,6 +105,11 @@ std::string DirectionDeltaTable::defaultPath() const {
 }
 
 void DirectionDeltaTable::loadFromFile(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    loadFromFileUnlocked(path);
+}
+
+void DirectionDeltaTable::loadFromFileUnlocked(const std::string& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input.is_open()) {
         throw std::runtime_error("failed to open direction delta table: " + path);
@@ -129,14 +134,16 @@ void DirectionDeltaTable::loadFromFile(const std::string& path) {
 }
 
 bool DirectionDeltaTable::isLoaded() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     return !table_.empty();
 }
 
 void DirectionDeltaTable::ensureLoaded() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!table_.empty()) {
         return;
     }
-    loadFromFile(defaultPath());
+    loadFromFileUnlocked(defaultPath());
 }
 
 std::uint32_t encode_full_direction_side_cells(
