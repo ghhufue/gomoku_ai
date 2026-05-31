@@ -168,7 +168,7 @@ def normalized_policy_strength(values: np.ndarray) -> np.ndarray:
 
 
 class PolicyViewer(tk.Tk):
-    def __init__(self, checkpoint: Path | None, bot_name: str, device: str):
+    def __init__(self, checkpoint: Path | None, bot_name: str, device: str, load_latest: bool = False):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry("1320x860")
@@ -200,7 +200,7 @@ class PolicyViewer(tk.Tk):
         self._build_layout()
         self._bind_shortcuts()
 
-        if checkpoint is None:
+        if checkpoint is None and load_latest:
             checkpoint = find_latest_checkpoint()
         if checkpoint is not None:
             self.load_checkpoint(checkpoint)
@@ -293,15 +293,18 @@ class PolicyViewer(tk.Tk):
         ttk.Button(controls, text="Choose checkpoint", command=self.choose_checkpoint).grid(
             row=2, column=0, sticky="ew", pady=(0, 10)
         )
+        ttk.Button(controls, text="Load latest checkpoint", command=self.load_latest_checkpoint).grid(
+            row=3, column=0, sticky="ew", pady=(0, 10)
+        )
 
-        ttk.Label(controls, text="Opponent bot", style="Muted.TLabel").grid(row=3, column=0, sticky="w")
+        ttk.Label(controls, text="Opponent bot", style="Muted.TLabel").grid(row=4, column=0, sticky="w")
         self.bot_combo = ttk.Combobox(controls, textvariable=self.bot_var, values=available_bots(), state="readonly")
-        self.bot_combo.grid(row=4, column=0, sticky="ew", pady=(4, 10))
+        self.bot_combo.grid(row=5, column=0, sticky="ew", pady=(4, 10))
         self.bot_combo.bind("<<ComboboxSelected>>", lambda _event: self.change_bot())
 
-        ttk.Label(controls, text="Model side", style="Muted.TLabel").grid(row=5, column=0, sticky="w")
+        ttk.Label(controls, text="Model side", style="Muted.TLabel").grid(row=6, column=0, sticky="w")
         side_row = ttk.Frame(controls, style="Panel.TFrame")
-        side_row.grid(row=6, column=0, sticky="ew", pady=(4, 10))
+        side_row.grid(row=7, column=0, sticky="ew", pady=(4, 10))
         ttk.Radiobutton(side_row, text="Black", variable=self.side_var, value="black", command=self.reset_game).pack(side=tk.LEFT)
         ttk.Radiobutton(side_row, text="White", variable=self.side_var, value="white", command=self.reset_game).pack(
             side=tk.LEFT,
@@ -309,9 +312,9 @@ class PolicyViewer(tk.Tk):
         )
 
         ttk.Button(controls, text="Next move", style="Accent.TButton", command=self.next_step).grid(
-            row=7, column=0, sticky="ew", pady=(12, 8)
+            row=8, column=0, sticky="ew", pady=(12, 8)
         )
-        ttk.Button(controls, text="New game", command=self.reset_game).grid(row=8, column=0, sticky="ew")
+        ttk.Button(controls, text="New game", command=self.reset_game).grid(row=9, column=0, sticky="ew")
 
     def _build_snapshot_panel(self, parent: ttk.Frame) -> None:
         panel = ttk.Frame(parent, style="Card.TFrame", padding=14)
@@ -386,6 +389,14 @@ class PolicyViewer(tk.Tk):
             self.load_checkpoint(Path(path))
             self.reset_game()
 
+    def load_latest_checkpoint(self) -> None:
+        checkpoint = find_latest_checkpoint()
+        if checkpoint is None:
+            messagebox.showinfo("No checkpoint found", "No checkpoint was found under gomoku_ai/runs/.")
+            return
+        self.load_checkpoint(checkpoint)
+        self.reset_game()
+
     def load_checkpoint(self, path: Path) -> None:
         try:
             self.model = load_model(path, self.device)
@@ -419,7 +430,10 @@ class PolicyViewer(tk.Tk):
         self.move_log = []
         if self.model_player != BLACK:
             self._play_bot_move()
-        self.status.set(f"{player_name(self.current_player)} to move")
+        if self.model is None:
+            self.status.set("Choose a checkpoint to begin")
+        else:
+            self.status.set(f"{player_name(self.current_player)} to move")
         self.render()
 
     def next_step(self) -> None:
@@ -722,7 +736,8 @@ class PolicyViewer(tk.Tk):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Interactive GUI for visualizing Gomoku policy probabilities.")
-    parser.add_argument("--checkpoint", type=Path, default=None, help="Checkpoint path. Defaults to latest checkpoint under runs/.")
+    parser.add_argument("--checkpoint", type=Path, default=None, help="Checkpoint path to load at startup.")
+    parser.add_argument("--latest", action="store_true", help="Load the latest checkpoint under runs/ at startup.")
     parser.add_argument("--bot", type=str, default="reward_driven_hard", choices=available_bots())
     parser.add_argument("--device", type=str, default="auto")
     return parser
@@ -730,7 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    app = PolicyViewer(checkpoint=args.checkpoint, bot_name=args.bot, device=args.device)
+    app = PolicyViewer(checkpoint=args.checkpoint, bot_name=args.bot, device=args.device, load_latest=args.latest)
     app.mainloop()
 
 
